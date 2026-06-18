@@ -64,7 +64,10 @@
       "Bash(bash -n \"動画AIを起動.command\")",
       "Bash(bash -n \"動画AIを停止.command\")",
       "Bash(ffprobe -v error -show_entries format_tags -of default=noprint_wrappers=1 IMG_0798.MOV)",
-      "Bash(ffmpeg -hide_banner -i IMG_0798.MOV -t 10 -vn -ar 44100 -ac 1 -b:a 128k /tmp/intro.mp3 -y)"
+      "Bash(ffmpeg -hide_banner -i IMG_0798.MOV -t 10 -vn -ar 44100 -ac 1 -b:a 128k /tmp/intro.mp3 -y)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m '編集クオリティ向上: 完結する構成＋自然な字幕改行 *)",
+      "Bash(git tag *)"
     ]
   }
 }

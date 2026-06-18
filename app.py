@@ -97,22 +97,27 @@ def generate_structure(cleaned_segments, duration):
 
 {segments_with_time}
 
-この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画の構成を作ってください。
+この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画を構成してください。
+目的は「長い動画を、テンポよくカットして“ちゃんと完結した”ショート動画にする」こと。
 
-【シーン選定の絶対ルール】（最優先・必ず守る）
+【最も大切なこと】
+- 話の流れが最初から最後まで通っていること。起→展開→締めがあり、**途中でぶつ切りに終わらせない**
+- **重要な場面・面白い場面・結末（オチ/まとめ）は必ず残す**。長さを気にして大事な部分を削らない
+- 不要な部分（言い間違い、長い沈黙、冗長な繰り返し、どうでもいい雑談）は積極的に省いてテンポを上げる
+
+【シーン選定の絶対ルール】（必ず守る）
 - 各シーンの start / end は、上記セグメントの [開始秒〜終了秒] の値とそのまま一致させる。セグメントの途中の秒数で切らない
 - セグメント1つ、または連続する複数セグメントをまとめて1シーンにする（区切りはセグメント境界のみ）
 - 文章・話が完結しているシーンだけを選ぶ（言い切りの途中・文の途中で終わるシーンは選ばない）
 - 前後のシーンが話の流れとして自然につながるように選ぶ（脈絡なく飛ばさない）
-- 「えーと」「あの」「えー」などのフィラーで始まるセグメントはシーンの先頭にしない（避ける）
+- 「えーと」「あの」「えー」などのフィラーで始まるセグメントはシーンの先頭にしない
 
 編集の鉄則：
-- 動画全体から最も面白い・価値あるシーンを選ぶ
-- 冒頭3秒で視聴者を引き込む
-- 1シーンは2〜5秒以内に収める（短い場合は連続セグメントをまとめる）
-- シーンは時系列順に並べる
-- シーン同士が重複しないようにする
-- 全体の長さは20〜40秒に収める
+- 冒頭3秒で視聴者を引き込む（最もインパクトのある場面から始める）
+- テンポを保つ（だらだらさせない）。1シーンは目安2〜6秒、強調したい所だけ長めにして緩急をつける
+- シーンは時系列順に並べ、重複させない
+- **最後は必ず話の締めくくり（まとめ・結論・オチ）で終わる**
+- 全体の長さは30〜60秒を目安にする。ただし長さのために重要な場面や結末を削らない（完結を最優先し、必要なら短く/長くしてよい）
 
 演出の指示：
 - 動画全体に合うBGMのムード（bgm_mood）を1つ提案する（例：明るい / 感動的 / 緊張感 / おしゃれ / コミカル / 落ち着いた）
@@ -370,20 +375,50 @@ def create_srt(segments, output_srt):
         for i, segment in enumerate(segments):
             f.write(f"{i+1}\n{to_srt_time(segment['start'])} --> {to_srt_time(segment['end'])}\n{segment['text']}\n\n")
 
+# 改行位置の良し悪し（読みやすさ）の判定に使う文字
+_BREAK_AFTER = "、。！？" + "はがをにへとでもやのからまでねよさ"   # この直後で改行すると自然（句読点・助詞）
+_BAD_LINE_HEAD = "、。！？ー〜ゃゅょっぁぃぅぇぉ・"                  # 行頭に来てほしくない文字
+
 def wrap_text(text, font, max_width, draw):
-    lines = []
-    current_line = ""
-    for char in text:
-        test_line = current_line + char
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if bbox[2] - bbox[0] <= max_width:
-            current_line = test_line
+    """字幕を読みやすく改行する。1行に収まればそのまま。
+    収まらなければ「左右の長さが揃う中央付近」かつ「助詞・句読点など自然な位置」で2行に分ける。"""
+    def width(s):
+        b = draw.textbbox((0, 0), s, font=font)
+        return b[2] - b[0]
+
+    if width(text) <= max_width:
+        return [text]
+
+    n = len(text)
+    target = n / 2
+    best = None
+    for i in range(1, n):
+        if width(text[:i]) > max_width or width(text[i:]) > max_width:
+            continue
+        score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える）
+        prev, nxt = text[i - 1], text[i]
+        if prev in "、。！？":
+            score -= 8                     # 句読点の直後は最優先で改行
+        elif prev in _BREAK_AFTER:
+            score -= 4                     # 助詞の直後も自然
+        if nxt in _BAD_LINE_HEAD:
+            score += 8                     # 行頭に句読点・小書き文字が来るのは避ける
+        if best is None or score < best[0]:
+            best = (score, i)
+    if best:
+        i = best[1]
+        return [text[:i], text[i:]]
+
+    # 2行で収まらない長文は機械的に折り返す（通常は起きない）
+    lines, cur = [], ""
+    for ch in text:
+        if width(cur + ch) <= max_width:
+            cur += ch
         else:
-            if current_line:
-                lines.append(current_line)
-            current_line = char
-    if current_line:
-        lines.append(current_line)
+            lines.append(cur)
+            cur = ch
+    if cur:
+        lines.append(cur)
     return lines
 
 def render_subtitle_png(text, w, h, path):
