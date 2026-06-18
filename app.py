@@ -504,6 +504,14 @@ def process_phase_scenes(job_id, video_path):
         candidates = [{"start": s["start"], "end": s["end"], "text": s["text"], "selected": in_ai(s)}
                       for s in cleaned]
 
+        # 各候補シーンのサムネイル（中間地点のフレーム）を抽出 → 選択画面で表示
+        job["progress"] = 68
+        for i, c in enumerate(candidates):
+            mid = (c["start"] + c["end"]) / 2
+            subprocess.run(["ffmpeg", "-ss", f"{mid:.2f}", "-i", video_path, "-frames:v", "1",
+                            "-vf", "scale=-2:120", "-q:v", "5",
+                            f"{OUTPUT_FOLDER}/{job_id}_thumb_{i}.jpg", "-y"], capture_output=True)
+
         job["transcript"] = transcript
         job["candidates"] = candidates
         job["video_path"] = video_path
@@ -622,6 +630,7 @@ HTML = """
         .scene-row:hover { background: #1a1a1a; }
         .scene-row.on { background: #15241a; }
         .scene-row input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; accent-color: #22c55e; }
+        .scene-row .thumb { width: 68px; height: 120px; flex-shrink: 0; border-radius: 6px; object-fit: cover; background: #222; }
         .scene-row .meta { flex: 1; }
         .scene-row .t { color: #666; font-size: 11px; font-variant-numeric: tabular-nums; }
         .scene-row .txt { font-size: 14px; color: #ddd; line-height: 1.4; }
@@ -737,11 +746,16 @@ async function showSceneSelector() {
         cb.checked = sc.selected;
         cb.dataset.idx = i;
         cb.onchange = () => row.classList.toggle('on', cb.checked);
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = '/thumb/' + jobId + '/' + i;
+        img.loading = 'lazy';
         const meta = document.createElement('div');
         meta.className = 'meta';
         meta.innerHTML = '<div class="t">' + fmtTime(sc.start) + ' 〜 ' + fmtTime(sc.end) + '</div><div class="txt"></div>';
         meta.querySelector('.txt').textContent = sc.text;
         row.appendChild(cb);
+        row.appendChild(img);
         row.appendChild(meta);
         list.appendChild(row);
     });
@@ -822,6 +836,14 @@ def get_scenes(job_id):
     job = jobs.get(job_id, {})
     return jsonify({"scenes": [{"start": c["start"], "end": c["end"], "text": c["text"], "selected": c["selected"]}
                                for c in job.get("candidates", [])]})
+
+@app.route("/thumb/<job_id>/<int:idx>")
+def thumb(job_id, idx):
+    """シーン候補のサムネイル画像を返す"""
+    path = f"{OUTPUT_FOLDER}/{job_id}_thumb_{idx}.jpg"
+    if os.path.exists(path):
+        return send_file(path, mimetype="image/jpeg")
+    return "", 404
 
 @app.route("/select_scenes/<job_id>", methods=["POST"])
 def select_scenes(job_id):
