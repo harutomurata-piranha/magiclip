@@ -480,37 +480,72 @@ def burn_subtitles(input_path, subtitles, output_path):
     for p in png_paths:
         os.remove(p)
 
-def process_video_phase1(job_id, video_path):
-    """前半：文字起こし→編集→字幕生成まで。完了後「字幕確認待ち」で停止しユーザー編集を待つ。"""
+def process_phase_scenes(job_id, video_path):
+    """段階1：文字起こし→候補シーンを用意。AIのおすすめ選択を付けて「シーン選択待ち」で停止。"""
     try:
         job = jobs[job_id]
         job.update(status="処理中", progress=10)
         audio_path = f"{OUTPUT_FOLDER}/{job_id}_audio.mp3"
-        output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
 
         job["progress"] = 20
         duration = get_video_duration(video_path)
         extract_audio(video_path, audio_path)
 
-        job["progress"] = 35
+        job["progress"] = 40
         transcript = transcribe_audio(audio_path)
-        cleaned_segments = clean_segments(transcript)
+        cleaned = clean_segments(transcript)
 
-        job["progress"] = 55
-        structure = generate_structure(cleaned_segments, duration)
-        scenes, bgm_mood = parse_scenes(structure, cleaned_segments, duration)
+        job["progress"] = 65
+        structure = generate_structure(cleaned, duration)
+        ai_scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
+
+        def in_ai(seg):
+            return any(sc["start"] - 0.05 <= seg["start"] < sc["end"] for sc in ai_scenes)
+        candidates = [{"start": s["start"], "end": s["end"], "text": s["text"], "selected": in_ai(s)}
+                      for s in cleaned]
+
+        job["transcript"] = transcript
+        job["candidates"] = candidates
+        job["video_path"] = video_path
+        job["bgm_mood"] = bgm_mood
+        job.update(status="シーン選択待ち", progress=70)
+
+    except Exception as e:
+        jobs[job_id] = {"status": "エラー", "error": str(e)}
+
+def process_phase_edit(job_id, selected_indices):
+    """段階2：選ばれたシーンで編集→字幕生成。「字幕確認待ち」で停止。"""
+    try:
+        job = jobs[job_id]
+        job.update(status="編集中", progress=75)
+        cand = job["candidates"]
+        transcript = job["transcript"]
+        video_path = job["video_path"]
+        output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
+
+        sel = [cand[i] for i in sorted(selected_indices) if 0 <= i < len(cand)]
+        if not sel:   # 何も選ばれなければAIのおすすめにフォールバック
+            sel = [c for c in cand if c["selected"]] or cand[:1]
+
+        # 連続するセグメントは1シーンにまとめ、離れた箇所（ジャンプ）はfadeでつなぐ
+        scenes, prev_end = [], None
+        for seg in sel:
+            if scenes and prev_end is not None and seg["start"] - prev_end < 0.3:
+                scenes[-1]["end"] = seg["end"]
+            else:
+                trans = "fade" if (prev_end is None or seg["start"] - prev_end > 2.0) else "cut"
+                scenes.append({"start": seg["start"], "end": seg["end"], "transition": trans})
+            prev_end = seg["end"]
+
         edit_video(video_path, scenes, output_path)
 
-        # 字幕：原音声の単語タイムスタンプを編集後タイムラインへマッピング（v3方式）
-        job["progress"] = 75
+        job["progress"] = 85
         cues = build_word_cues(transcript.words, scenes)
         subtitles = correct_segments(cues)
 
-        # 編集UIへ渡すために保存し、ここで一旦停止
         job["subtitles"] = subtitles
         job["output_path"] = output_path
-        job["bgm_mood"] = bgm_mood
-        job.update(status="字幕確認待ち", progress=80)
+        job.update(status="字幕確認待ち", progress=90)
 
     except Exception as e:
         jobs[job_id] = {"status": "エラー", "error": str(e)}
@@ -579,6 +614,18 @@ HTML = """
         .sub-time { color: #666; font-size: 12px; font-variant-numeric: tabular-nums; min-width: 42px; text-align: right; }
         .sub-input { flex: 1; background: #1a1a1a; border: 1px solid #2c2c2c; color: #fff; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-family: inherit; }
         .sub-input:focus { outline: none; border-color: #555; background: #222; }
+        .scene-area { display: none; margin-top: 28px; }
+        .scene-area h2 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+        .scene-area .hint { color: #888; font-size: 13px; margin-bottom: 16px; }
+        .scene-list { max-height: 50vh; overflow-y: auto; border: 1px solid #222; border-radius: 12px; padding: 4px; }
+        .scene-row { display: flex; gap: 10px; padding: 10px 8px; border-radius: 8px; cursor: pointer; align-items: flex-start; }
+        .scene-row:hover { background: #1a1a1a; }
+        .scene-row.on { background: #15241a; }
+        .scene-row input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; accent-color: #22c55e; }
+        .scene-row .meta { flex: 1; }
+        .scene-row .t { color: #666; font-size: 11px; font-variant-numeric: tabular-nums; }
+        .scene-row .txt { font-size: 14px; color: #ddd; line-height: 1.4; }
+        .scene-row.on .txt { color: #fff; }
     </style>
 </head>
 <body>
@@ -597,6 +644,12 @@ HTML = """
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill" style="width: 0%"></div>
         </div>
+    </div>
+    <div class="scene-area" id="sceneArea">
+        <h2>🎬 使うシーンを選ぶ</h2>
+        <p class="hint">チェックした部分が動画に入ります（✅＝AIのおすすめ）。入れたいシーンを追加・不要なものを外せます。</p>
+        <div class="scene-list" id="sceneList"></div>
+        <button class="btn" id="sceneBtn" onclick="submitScenes()">選んだシーンで作成</button>
     </div>
     <div class="edit-area" id="editArea">
         <h2>📝 字幕を確認・修正</h2>
@@ -629,7 +682,9 @@ async function uploadVideo() {
     document.getElementById('downloadArea').style.display = 'none';
     document.getElementById('errorArea').style.display = 'none';
     document.getElementById('editArea').style.display = 'none';
+    document.getElementById('sceneArea').style.display = 'none';
     document.getElementById('finalizeBtn').disabled = false;
+    document.getElementById('sceneBtn').disabled = false;
     const formData = new FormData();
     formData.append('video', selectedFile);
     const response = await fetch('/upload', { method: 'POST', body: formData });
@@ -644,7 +699,10 @@ function pollStatus() {
         const data = await response.json();
         document.getElementById('progressFill').style.width = data.progress + '%';
         document.getElementById('statusText').textContent = data.status;
-        if (data.status === '字幕確認待ち') {
+        if (data.status === 'シーン選択待ち') {
+            clearInterval(interval);
+            showSceneSelector();
+        } else if (data.status === '字幕確認待ち') {
             clearInterval(interval);
             showEditor();
         } else if (data.status === '完成') {
@@ -664,6 +722,45 @@ function pollStatus() {
 function fmtTime(sec) {
     const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
     return m + ':' + String(s).padStart(2, '0');
+}
+
+async function showSceneSelector() {
+    const res = await fetch('/scenes/' + jobId);
+    const data = await res.json();
+    const list = document.getElementById('sceneList');
+    list.innerHTML = '';
+    data.scenes.forEach((sc, i) => {
+        const row = document.createElement('label');
+        row.className = 'scene-row' + (sc.selected ? ' on' : '');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = sc.selected;
+        cb.dataset.idx = i;
+        cb.onchange = () => row.classList.toggle('on', cb.checked);
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.innerHTML = '<div class="t">' + fmtTime(sc.start) + ' 〜 ' + fmtTime(sc.end) + '</div><div class="txt"></div>';
+        meta.querySelector('.txt').textContent = sc.text;
+        row.appendChild(cb);
+        row.appendChild(meta);
+        list.appendChild(row);
+    });
+    document.getElementById('progressArea').style.display = 'none';
+    document.getElementById('sceneArea').style.display = 'block';
+}
+
+async function submitScenes() {
+    const boxes = document.querySelectorAll('#sceneList input[type=checkbox]');
+    const selected = Array.from(boxes).filter(b => b.checked).map(b => parseInt(b.dataset.idx));
+    document.getElementById('sceneBtn').disabled = true;
+    document.getElementById('sceneArea').style.display = 'none';
+    document.getElementById('progressArea').style.display = 'block';
+    await fetch('/select_scenes/' + jobId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected })
+    });
+    pollStatus();
 }
 
 async function showEditor() {
@@ -716,8 +813,25 @@ def upload():
     video_path = f"{UPLOAD_FOLDER}/{job_id}_{file.filename}"
     file.save(video_path)
     jobs[job_id] = {"status": "処理中", "progress": 0}
-    threading.Thread(target=process_video_phase1, args=(job_id, video_path)).start()
+    threading.Thread(target=process_phase_scenes, args=(job_id, video_path)).start()
     return jsonify({"job_id": job_id})
+
+@app.route("/scenes/<job_id>")
+def get_scenes(job_id):
+    """シーン選択待ちのジョブの、候補シーン一覧（AIおすすめ選択付き）を返す"""
+    job = jobs.get(job_id, {})
+    return jsonify({"scenes": [{"start": c["start"], "end": c["end"], "text": c["text"], "selected": c["selected"]}
+                               for c in job.get("candidates", [])]})
+
+@app.route("/select_scenes/<job_id>", methods=["POST"])
+def select_scenes(job_id):
+    """ユーザーが選んだシーン(インデックス配列)を受け取り、編集→字幕生成を開始する"""
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "シーン選択待ち":
+        return jsonify({"error": "not ready"}), 400
+    selected = (request.get_json(force=True) or {}).get("selected", [])
+    threading.Thread(target=process_phase_edit, args=(job_id, selected)).start()
+    return jsonify({"ok": True})
 
 @app.route("/status/<job_id>")
 def status(job_id):
