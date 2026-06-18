@@ -480,48 +480,63 @@ def burn_subtitles(input_path, subtitles, output_path):
     for p in png_paths:
         os.remove(p)
 
-def process_video(job_id, video_path):
+def process_video_phase1(job_id, video_path):
+    """前半：文字起こし→編集→字幕生成まで。完了後「字幕確認待ち」で停止しユーザー編集を待つ。"""
     try:
-        jobs[job_id] = {"status": "処理中", "progress": 10}
+        job = jobs[job_id]
+        job.update(status="処理中", progress=10)
         audio_path = f"{OUTPUT_FOLDER}/{job_id}_audio.mp3"
         output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
-        srt_path = f"{OUTPUT_FOLDER}/{job_id}_subtitles.srt"
-        subtitled_path = f"{OUTPUT_FOLDER}/{job_id}_subtitled.mp4"
-        final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
 
-        jobs[job_id]["progress"] = 20
+        job["progress"] = 20
         duration = get_video_duration(video_path)
         extract_audio(video_path, audio_path)
 
-        # 文字起こしは1回だけ（編集後の再認識はしない）
-        jobs[job_id]["progress"] = 35
+        job["progress"] = 35
         transcript = transcribe_audio(audio_path)
         cleaned_segments = clean_segments(transcript)
 
-        # シーン構成（失敗・空でもフォールバックで必ずシーンを得る）
-        jobs[job_id]["progress"] = 50
+        job["progress"] = 55
         structure = generate_structure(cleaned_segments, duration)
         scenes, bgm_mood = parse_scenes(structure, cleaned_segments, duration)
         edit_video(video_path, scenes, output_path)
 
-        # 字幕：原音声の単語タイムスタンプを編集後タイムラインへマッピング（v3方式：テキスト品質が高い）
-        jobs[job_id]["progress"] = 75
+        # 字幕：原音声の単語タイムスタンプを編集後タイムラインへマッピング（v3方式）
+        job["progress"] = 75
         cues = build_word_cues(transcript.words, scenes)
         subtitles = correct_segments(cues)
-        create_srt(subtitles, srt_path)
 
-        jobs[job_id]["progress"] = 85
-        burn_subtitles(output_path, subtitles, subtitled_path)
+        # 編集UIへ渡すために保存し、ここで一旦停止
+        job["subtitles"] = subtitles
+        job["output_path"] = output_path
+        job["bgm_mood"] = bgm_mood
+        job.update(status="字幕確認待ち", progress=80)
 
-        # BGM（無ければBGM無しで完成）
-        jobs[job_id]["progress"] = 95
+    except Exception as e:
+        jobs[job_id] = {"status": "エラー", "error": str(e)}
+
+def process_video_phase2(job_id, edited_subtitles):
+    """後半：ユーザーが修正した字幕で焼き込み→BGM→完成。"""
+    try:
+        job = jobs[job_id]
+        job.update(status="仕上げ中", progress=85)
+        output_path = job["output_path"]
+        bgm_mood = job.get("bgm_mood", "")
+        srt_path = f"{OUTPUT_FOLDER}/{job_id}_subtitles.srt"
+        subtitled_path = f"{OUTPUT_FOLDER}/{job_id}_subtitled.mp4"
+        final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
+
+        create_srt(edited_subtitles, srt_path)
+        burn_subtitles(output_path, edited_subtitles, subtitled_path)
+
+        job["progress"] = 95
         bgm_path, _ = get_bgm(bgm_mood)
         if bgm_path and mix_bgm(subtitled_path, bgm_path, final_path):
             os.remove(subtitled_path)
         else:
             os.replace(subtitled_path, final_path)
 
-        jobs[job_id] = {"status": "完成", "progress": 100, "output": final_path}
+        job.update(status="完成", progress=100, output=final_path)
 
     except Exception as e:
         jobs[job_id] = {"status": "エラー", "error": str(e)}
@@ -556,6 +571,14 @@ HTML = """
         .download-btn { display: inline-block; padding: 16px 32px; background: #22c55e; color: #fff; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 16px; }
         .file-name { margin-top: 16px; color: #aaa; font-size: 14px; }
         .error-area { display: none; margin-top: 32px; padding: 16px; background: #2a1a1a; border-radius: 12px; color: #f87171; font-size: 14px; }
+        .edit-area { display: none; margin-top: 28px; }
+        .edit-area h2 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+        .edit-area .hint { color: #888; font-size: 13px; margin-bottom: 16px; }
+        .sub-list { max-height: 50vh; overflow-y: auto; border: 1px solid #222; border-radius: 12px; padding: 8px; }
+        .sub-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; }
+        .sub-time { color: #666; font-size: 12px; font-variant-numeric: tabular-nums; min-width: 42px; text-align: right; }
+        .sub-input { flex: 1; background: #1a1a1a; border: 1px solid #2c2c2c; color: #fff; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-family: inherit; }
+        .sub-input:focus { outline: none; border-color: #555; background: #222; }
     </style>
 </head>
 <body>
@@ -574,6 +597,12 @@ HTML = """
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill" style="width: 0%"></div>
         </div>
+    </div>
+    <div class="edit-area" id="editArea">
+        <h2>📝 字幕を確認・修正</h2>
+        <p class="hint">気になる箇所を直してください（空欄にするとその字幕は非表示になります）。そのままでもOK。</p>
+        <div class="sub-list" id="subList"></div>
+        <button class="btn" id="finalizeBtn" onclick="finalizeEdit()">この内容で動画を作成</button>
     </div>
     <div class="download-area" id="downloadArea">
         <p style="color:#22c55e; font-size:18px; font-weight:600; margin-bottom:16px">✅ 完成しました！</p>
@@ -599,6 +628,8 @@ async function uploadVideo() {
     document.getElementById('progressArea').style.display = 'block';
     document.getElementById('downloadArea').style.display = 'none';
     document.getElementById('errorArea').style.display = 'none';
+    document.getElementById('editArea').style.display = 'none';
+    document.getElementById('finalizeBtn').disabled = false;
     const formData = new FormData();
     formData.append('video', selectedFile);
     const response = await fetch('/upload', { method: 'POST', body: formData });
@@ -613,7 +644,10 @@ function pollStatus() {
         const data = await response.json();
         document.getElementById('progressFill').style.width = data.progress + '%';
         document.getElementById('statusText').textContent = data.status;
-        if (data.status === '完成') {
+        if (data.status === '字幕確認待ち') {
+            clearInterval(interval);
+            showEditor();
+        } else if (data.status === '完成') {
             clearInterval(interval);
             document.getElementById('downloadArea').style.display = 'block';
             document.getElementById('downloadBtn').href = '/download/' + jobId;
@@ -625,6 +659,46 @@ function pollStatus() {
             document.getElementById('uploadBtn').disabled = false;
         }
     }, 2000);
+}
+
+function fmtTime(sec) {
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return m + ':' + String(s).padStart(2, '0');
+}
+
+async function showEditor() {
+    const res = await fetch('/subtitles/' + jobId);
+    const data = await res.json();
+    const list = document.getElementById('subList');
+    list.innerHTML = '';
+    // 字幕の時刻も得るため、表示用に番号＋テキストのみ（時刻はサーバー保持）
+    data.subtitles.forEach((text, i) => {
+        const row = document.createElement('div');
+        row.className = 'sub-row';
+        row.innerHTML = '<span class="sub-time">' + (i + 1) + '</span>';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'sub-input';
+        input.value = text;
+        row.appendChild(input);
+        list.appendChild(row);
+    });
+    document.getElementById('progressArea').style.display = 'none';
+    document.getElementById('editArea').style.display = 'block';
+}
+
+async function finalizeEdit() {
+    const inputs = document.querySelectorAll('#subList .sub-input');
+    const subtitles = Array.from(inputs).map(el => el.value);
+    document.getElementById('finalizeBtn').disabled = true;
+    document.getElementById('editArea').style.display = 'none';
+    document.getElementById('progressArea').style.display = 'block';
+    await fetch('/finalize/' + jobId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtitles })
+    });
+    pollStatus();
 }
 </script>
 </body>
@@ -641,19 +715,42 @@ def upload():
     job_id = str(uuid.uuid4())[:8]
     video_path = f"{UPLOAD_FOLDER}/{job_id}_{file.filename}"
     file.save(video_path)
-    thread = threading.Thread(target=process_video, args=(job_id, video_path))
-    thread.start()
+    jobs[job_id] = {"status": "処理中", "progress": 0}
+    threading.Thread(target=process_video_phase1, args=(job_id, video_path)).start()
     return jsonify({"job_id": job_id})
 
 @app.route("/status/<job_id>")
 def status(job_id):
     job = jobs.get(job_id, {"status": "不明", "progress": 0})
-    return jsonify(job)
+    return jsonify({"status": job.get("status"), "progress": job.get("progress", 0), "error": job.get("error")})
+
+@app.route("/subtitles/<job_id>")
+def get_subtitles(job_id):
+    """字幕確認待ちのジョブの、編集用字幕（テキストのみ）を返す"""
+    job = jobs.get(job_id, {})
+    subs = job.get("subtitles", [])
+    return jsonify({"subtitles": [s["text"] for s in subs]})
+
+@app.route("/finalize/<job_id>", methods=["POST"])
+def finalize(job_id):
+    """ユーザーが修正した字幕テキストを受け取り、後半処理を開始する"""
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "字幕確認待ち":
+        return jsonify({"error": "not ready"}), 400
+    edited_texts = (request.get_json(force=True) or {}).get("subtitles", [])
+    stored = job.get("subtitles", [])
+    merged = []
+    for i, s in enumerate(stored):
+        text = edited_texts[i].strip() if i < len(edited_texts) and isinstance(edited_texts[i], str) else s["text"]
+        if text:   # 空にした字幕は表示しない（削除扱い）
+            merged.append({"start": s["start"], "end": s["end"], "text": text})
+    threading.Thread(target=process_video_phase2, args=(job_id, merged)).start()
+    return jsonify({"ok": True})
 
 @app.route("/download/<job_id>")
 def download(job_id):
     job = jobs.get(job_id)
-    if job and job["status"] == "完成":
+    if job and job.get("status") == "完成":
         return send_file(job["output"], as_attachment=True, download_name="edited_video.mp4")
     return "Not found", 404
 
