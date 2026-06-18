@@ -5,6 +5,7 @@ import uuid
 import subprocess
 import json
 import re
+import difflib
 from PIL import Image, ImageDraw, ImageFont
 import shutil
 import openai
@@ -502,10 +503,10 @@ def process_phase_scenes(job_id, video_path):
         # 字幕テキストを先に整える（確認画面で編集しやすいように）
         cleaned = correct_segments(cleaned)
 
-        # 各候補に、その区間内の単語タイムスタンプを保持（前後の無音トリム用）
+        # 各候補に、その区間内の単語（表記＋タイムスタンプ）を保持（テキスト基準のカット用）
         words = getattr(transcript, "words", None) or []
         def seg_words(s):
-            return [{"start": getattr(w, "start", 0.0), "end": getattr(w, "end", 0.0)}
+            return [{"surface": getattr(w, "word", ""), "start": getattr(w, "start", 0.0), "end": getattr(w, "end", 0.0)}
                     for w in words if s["start"] - 0.01 <= getattr(w, "start", -1) < s["end"]]
 
         def in_ai(seg):
@@ -530,8 +531,57 @@ def process_phase_scenes(job_id, video_path):
     except Exception as e:
         jobs[job_id] = {"status": "エラー", "error": str(e)}
 
+def _char_to_word(original, words):
+    """元テキストの各文字が、どの単語(index)に対応するかを返す（単語の表記と文字単位で対応付け）"""
+    wc, owner = [], []
+    for wi, w in enumerate(words):
+        for ch in w["surface"]:
+            wc.append(ch)
+            owner.append(wi)
+    res = [None] * len(original)
+    sm = difflib.SequenceMatcher(None, list(original), wc, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag in ("equal", "replace"):
+            for off in range(min(i2 - i1, j2 - j1)):
+                res[i1 + off] = owner[j1 + off]
+    last = None        # 前方向に補完
+    for k in range(len(res)):
+        if res[k] is None: res[k] = last
+        else: last = res[k]
+    nxt = None         # 後方向に補完
+    for k in range(len(res) - 1, -1, -1):
+        if res[k] is None: res[k] = nxt
+        else: nxt = res[k]
+    return res
+
+def trimmed_range(seg, edited_text):
+    """元テキスト(seg['text'])と編集後テキストを差分し、『削除された部分』を映像からトリムした
+    [start, end] を返す。書き換え(誤字修正)はカット扱いにしない（=映像維持）。"""
+    D = seg["text"]
+    E = edited_text
+    words = seg.get("words", [])
+    full = (seg["start"], seg["end"])
+    if not words or not E.strip():
+        return full
+    # 残る文字(equal/replace)のDインデックス範囲を求める（delete=削除のみカット対象）
+    sm = difflib.SequenceMatcher(None, list(D), list(E), autojunk=False)
+    kept = [i for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag in ("equal", "replace")
+            for i in range(i1, i2)]
+    if not kept:
+        return full
+    c2w = _char_to_word(D, words)
+    wf, wl = c2w[min(kept)], c2w[max(kept)]
+    if wf is None or wl is None:
+        return full
+    s = max(seg["start"], words[wf]["start"] - 0.08)
+    e = min(seg["end"], words[wl]["end"] + 0.12)
+    if e - s < 0.4:
+        e = min(seg["end"], s + 0.4)
+    return (s, e)
+
 def process_phase_build(job_id, selected_indices, texts):
-    """段階2：選ばれたシーン＋編集テキストで、編集→字幕→焼き込み→BGM→完成（1画面で確定）。"""
+    """段階2：選ばれたシーン＋編集テキストで、編集→字幕→焼き込み→BGM→完成（1画面で確定）。
+    テキストで削除した部分は映像もカット（テキスト基準の編集）。"""
     try:
         job = jobs[job_id]
         job.update(status="生成中", progress=75)
@@ -543,58 +593,37 @@ def process_phase_build(job_id, selected_indices, texts):
         subtitled_path = f"{OUTPUT_FOLDER}/{job_id}_subtitled.mp4"
         final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
 
-        # 編集テキストを反映（index揃え）
-        for i, t in enumerate(texts):
-            if 0 <= i < len(cand) and isinstance(t, str):
-                cand[i]["text"] = t.strip()
-
         sel = sorted(i for i in selected_indices if 0 <= i < len(cand))
         if not sel:   # 何も選ばれなければAIのおすすめにフォールバック
             sel = [i for i, c in enumerate(cand) if c["selected"]] or [0]
 
-        # 連続するセグメントは1シーンにまとめ、離れた箇所（ジャンプ）はfadeでつなぐ。
-        # 各セグメントがどのシーンに属するか(seg_scene)、各シーンの構成セグメント(scene_segs)を記録。
-        scenes, seg_scene, scene_segs, prev_end = [], {}, [], None
+        # 選択された各セグメント → 1シーン。編集テキストで削った分は映像もトリム。
+        scenes, scene_text, prev_src_end = [], [], None
         for i in sel:
             seg = cand[i]
-            if scenes and prev_end is not None and seg["start"] - prev_end < 0.3:
-                scenes[-1]["end"] = seg["end"]
-                scene_segs[-1].append(i)
-            else:
-                trans = "fade" if (prev_end is None or seg["start"] - prev_end > 2.0) else "cut"
-                scenes.append({"start": seg["start"], "end": seg["end"], "transition": trans})
-                scene_segs.append([i])
-            seg_scene[i] = len(scenes) - 1
-            prev_end = seg["end"]
+            edited = texts[i].strip() if i < len(texts) and isinstance(texts[i], str) else seg["text"]
+            if not edited:                 # 全消し → そのシーンは使わない
+                continue
+            s, e = trimmed_range(seg, edited)
+            trans = "fade" if (prev_src_end is None or s - prev_src_end > 2.0) else "cut"
+            scenes.append({"start": s, "end": e, "transition": trans})
+            scene_text.append(edited)
+            prev_src_end = seg["end"]
 
-        # 各シーンの前後の無音をトリム（発話＝テキストのある範囲に映像を寄せる）
-        for sc, segidxs in zip(scenes, scene_segs):
-            first_words = cand[segidxs[0]]["words"]
-            last_words = cand[segidxs[-1]]["words"]
-            if first_words:
-                sc["start"] = max(sc["start"], first_words[0]["start"] - 0.10)
-            if last_words:
-                sc["end"] = min(sc["end"], last_words[-1]["end"] + 0.20)
-            if sc["end"] - sc["start"] < 0.5:        # 短すぎ防止
-                sc["end"] = sc["start"] + 0.5
+        if not scenes:                     # 全部消された場合の保険
+            seg = cand[sel[0]]
+            scenes = [{"start": seg["start"], "end": seg["end"], "transition": "cut"}]
+            scene_text = [seg["text"]]
 
         edit_video(video_path, scenes, output_path)   # 各sceneに out_start/out_end が付く
 
-        # 字幕：選ばれた各セグメントを、所属シーンの編集後タイムラインに配置（編集テキストを使用）
+        # 字幕：各シーン（=トリム後クリップ）全体に、編集テキストを表示
         job["progress"] = 85
         subs = []
-        for i in sel:
-            seg = cand[i]
-            text = seg["text"].strip()
-            if not text:
-                continue
-            sc = scenes[seg_scene[i]]
-            cs = max(sc["out_start"], min(seg["start"] - sc["start"] + sc["out_start"], sc["out_end"]))
-            ce = max(cs, min(seg["end"] - sc["start"] + sc["out_start"], sc["out_end"]))
-            subs.append({"start": cs, "end": ce, "text": text})
-        subs.sort(key=lambda x: x["start"])
+        for sc, text in zip(scenes, scene_text):
+            subs.append({"start": sc["out_start"], "end": sc["out_end"], "text": text})
         result = []
-        for c in subs:
+        for c in sorted(subs, key=lambda x: x["start"]):
             if c["end"] <= c["start"]:
                 c["end"] = c["start"] + 0.4
             if result and c["start"] < result[-1]["end"]:
@@ -689,7 +718,7 @@ HTML = """
     </div>
     <div class="scene-area" id="sceneArea">
         <h2>🎬 シーンを選んで字幕を直す</h2>
-        <p class="hint">チェックした部分が動画に入ります（✅＝AIのおすすめ）。字幕テキストはその場で直せます。</p>
+        <p class="hint">✅＝動画に入れるシーン。テキストの<b>一部を消すとその部分の映像もカット</b>されます（誤字を直すだけなら映像はそのまま）。</p>
         <div class="scene-list" id="sceneList"></div>
         <button class="btn" id="sceneBtn" onclick="submitScenes()">この内容で動画を作成</button>
     </div>
