@@ -658,4 +658,5 @@ def download(job_id):
     return "Not found", 404
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # 5000番はmacOSのAirPlay受信機能と衝突する（403が返り真っ白になる）ため5001を使う
+    app.run(debug=True, port=5001)
