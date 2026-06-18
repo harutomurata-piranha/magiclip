@@ -502,9 +502,16 @@ def process_phase_scenes(job_id, video_path):
         # 字幕テキストを先に整える（確認画面で編集しやすいように）
         cleaned = correct_segments(cleaned)
 
+        # 各候補に、その区間内の単語タイムスタンプを保持（前後の無音トリム用）
+        words = getattr(transcript, "words", None) or []
+        def seg_words(s):
+            return [{"start": getattr(w, "start", 0.0), "end": getattr(w, "end", 0.0)}
+                    for w in words if s["start"] - 0.01 <= getattr(w, "start", -1) < s["end"]]
+
         def in_ai(seg):
             return any(sc["start"] - 0.05 <= seg["start"] < sc["end"] for sc in ai_scenes)
-        candidates = [{"start": s["start"], "end": s["end"], "text": s["text"], "selected": in_ai(s)}
+        candidates = [{"start": s["start"], "end": s["end"], "text": s["text"],
+                       "selected": in_ai(s), "words": seg_words(s)}
                       for s in cleaned]
 
         # 各候補シーンのサムネイル（中間地点のフレーム）を抽出 → 確認画面で表示
@@ -546,17 +553,30 @@ def process_phase_build(job_id, selected_indices, texts):
             sel = [i for i, c in enumerate(cand) if c["selected"]] or [0]
 
         # 連続するセグメントは1シーンにまとめ、離れた箇所（ジャンプ）はfadeでつなぐ。
-        # 各セグメントがどのシーンに属するか(seg_scene)も記録（字幕の時刻計算用）。
-        scenes, seg_scene, prev_end = [], {}, None
+        # 各セグメントがどのシーンに属するか(seg_scene)、各シーンの構成セグメント(scene_segs)を記録。
+        scenes, seg_scene, scene_segs, prev_end = [], {}, [], None
         for i in sel:
             seg = cand[i]
             if scenes and prev_end is not None and seg["start"] - prev_end < 0.3:
                 scenes[-1]["end"] = seg["end"]
+                scene_segs[-1].append(i)
             else:
                 trans = "fade" if (prev_end is None or seg["start"] - prev_end > 2.0) else "cut"
                 scenes.append({"start": seg["start"], "end": seg["end"], "transition": trans})
+                scene_segs.append([i])
             seg_scene[i] = len(scenes) - 1
             prev_end = seg["end"]
+
+        # 各シーンの前後の無音をトリム（発話＝テキストのある範囲に映像を寄せる）
+        for sc, segidxs in zip(scenes, scene_segs):
+            first_words = cand[segidxs[0]]["words"]
+            last_words = cand[segidxs[-1]]["words"]
+            if first_words:
+                sc["start"] = max(sc["start"], first_words[0]["start"] - 0.10)
+            if last_words:
+                sc["end"] = min(sc["end"], last_words[-1]["end"] + 0.20)
+            if sc["end"] - sc["start"] < 0.5:        # 短すぎ防止
+                sc["end"] = sc["start"] + 0.5
 
         edit_video(video_path, scenes, output_path)   # 各sceneに out_start/out_end が付く
 
