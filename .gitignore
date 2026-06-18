@@ -1,0 +1,18 @@
+.env
+.DS_Store
+__pycache__/
+*.pyc
+
+# 作業フォルダ・生成物
+uploads/
+outputs/
+frames/
+bgm/*.mp3
+server.log
+
+# ルート直下のメディア／生成物（大きい・一時的）
+*.MOV
+*.mov
+*.mp4
+*.mp3
+*.srt
