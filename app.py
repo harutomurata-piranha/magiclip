@@ -385,7 +385,7 @@ def correct_segments(segments):
 - 不要なつなぎ言葉が文頭にあって読みにくければ削る：「で、」「あと、」「で」など（意味に必要なら残す）
 - 言い直し・直後の重複を1つにまとめる（例：「ローソン、ローソンが」→「ローソンが」、「郵便局、郵便局が」→「郵便局が」）
 - 明らかな誤字・脱字を直す（一般的な語のみ）
-- 句読点を自然に補い、読みやすくする
+- 句読点（。や、）は付けない。区切りが必要なら半角スペースで表現する（ショート動画の字幕スタイル）
 
 【守ること（ミスを増やさない）】
 - 店名・地名・人名などの固有名詞は、確信が持てなければ変更しない（推測で別の漢字・別の語に置き換えない）
@@ -461,6 +461,12 @@ def build_word_cues(words, scenes):
             result[-1]["end"] = c["start"]   # 重なり解消（同時に2つ表示しない）
         result.append(c)
     return result
+
+def strip_punct(text):
+    """字幕は句読点なしの方が見やすい。。、を除き、区切りは半角スペースにする。"""
+    for p in ("、", "。", "，", "．", "､", "｡"):
+        text = text.replace(p, " ")
+    return " ".join(text.split())
 
 def create_srt(segments, output_srt):
     def to_srt_time(seconds):
@@ -631,6 +637,9 @@ def _generate_and_build(job_id):
     job["progress"] = 80
     cues = build_word_cues(transcript.words, scenes)
     subtitles = correct_segments(cues)
+    for s in subtitles:                       # 字幕は句読点なしに（仕上げ）
+        s["text"] = strip_punct(s["text"])
+    subtitles = [s for s in subtitles if s["text"]]
     create_srt(subtitles, srt_path)
 
     job["progress"] = 88
