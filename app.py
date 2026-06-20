@@ -109,10 +109,7 @@ def generate_structure(cleaned_segments, duration):
     segments_with_time = ""
     for seg in cleaned_segments:
         segments_with_time += f"[{seg['start']:.1f}秒〜{seg['end']:.1f}秒] {seg['text']}\n"
-    message = anthropic_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1000,
-        messages=[{"role": "user", "content": f"""
+    propose_prompt = f"""
 あなたはTikTok・Instagram・YouTubeショートのプロ編集者です。
 以下は{duration:.1f}秒の動画の音声テキストです。各行が1セグメントで、[開始秒〜終了秒]が付いています。
 
@@ -148,10 +145,50 @@ def generate_structure(cleaned_segments, duration):
 
 以下のJSON形式のみで答えてください。
 {{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
-"""}]
-    )
-    text = message.content[0].text.replace("```json", "").replace("```", "").strip()
-    return text
+"""
+
+    # 1回目：構成案を作る（temperatureは控えめ＝最良の選択に寄せつつ、再生成で多少の変化も残す）
+    msg1 = anthropic_client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=1500, temperature=0.7,
+        messages=[{"role": "user", "content": propose_prompt}])
+    proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
+
+    # 2回目：自分の構成案を厳しくレビューして改善（propose → critique → refine）
+    try:
+        msg2 = anthropic_client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=1500, temperature=0.3,
+            messages=[{"role": "user", "content": f"""
+あなたはプロのショート動画編集者です。以下は動画の音声テキストと、それに対するショート動画の構成案です。
+
+# 音声テキスト（[開始秒〜終了秒]）
+{segments_with_time}
+
+# 構成案（JSON）
+{proposal}
+
+この構成案を厳しくレビューし、より良いショート動画になるよう改善した「最終構成」を出してください。
+特に次を確認し、必要なら直す：
+- 冒頭3秒が最も惹きつける場面になっているか（弱ければ強い場面に差し替える）
+- 退屈な部分・冗長な繰り返し・どうでもいい雑談が混ざっていないか（あれば外す）
+- 一番の見どころ・面白い場面・結末（オチ/まとめ）が入っているか（抜けていれば足す）
+- 話が最初から最後まで自然につながり、途中でぶつ切りに終わっていないか
+- テンポが良いか（だらだらしていないか）
+
+厳守ルール：
+- start/end は必ず上記セグメントの[開始秒〜終了秒]の値と一致させる（途中で切らない）
+- start/end は0以上{duration:.1f}以下
+- シーンは時系列順（startの昇順）に並べる。重複させない
+- 改善が不要と判断したら構成案のままでよい
+
+以下のJSON形式のみで答えてください（他の文章は不要）。
+{{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
+"""}])
+        refined = msg2.content[0].text.replace("```json", "").replace("```", "").strip()
+        if json.loads(refined).get("scenes"):   # 妥当な改善版ならそれを採用
+            return refined
+    except Exception:
+        pass
+    return proposal
 
 def remove_overlapping_scenes(scenes):
     scenes = sorted(scenes, key=lambda x: x["start"])
