@@ -6,6 +6,7 @@ import subprocess
 import json
 import re
 import difflib
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont
 import shutil
 import openai
@@ -105,124 +106,96 @@ def clean_segments(transcript):
         cleaned.append({"start": segment.start, "end": segment.end, "text": text})
     return cleaned
 
-# 構成（シーン選定）は判断力の高い Opus を使う。字幕校正は sonnet のまま（コスト抑制）
-STRUCTURE_MODEL = "claude-opus-4-8"
+# 構成（シーン選定）は sonnet を best-of-3＋判定で使う（コスパ重視で品質を補う）。字幕校正もsonnet。
+STRUCTURE_MODEL = "claude-sonnet-4-6"
 
-# 「もう一度生成」のたびに切り替える編集方針（毎回ちがう“切り口”の編集に見せる）
-EDIT_ANGLES = [
-    "",  # 1本目：標準（バランス重視）
-    "【今回の編集方針】テンポ最優先。1シーンを短め（2〜4秒）にして小気味よく多めに切り替え、勢いを出す。",
-    "【今回の編集方針】ハイライト重視。一番面白い/盛り上がる場面を主役に据え、そこを少し長めに厚く見せる。",
-    "【今回の編集方針】ストーリー重視。話の流れと文脈が丁寧に伝わるよう、つながりを大切に組む。",
-    "【今回の編集方針】別の切り口。前回までと違う場面・トピックを主役にして、新鮮な印象にする。",
+# best-of-3 の3案を作る切り口（探索の多様性を出す）
+CANDIDATE_ANGLES = [
+    "バランス型：見どころを過不足なく入れ、起承転結で気持ちよく完結させる。",
+    "ハイライト型：最も面白い/価値ある瞬間を主役に据えてそこを厚く見せる。導入は最短で本題へ入る。",
+    "テンポ型：テンポ最優先。1シーンを短め(2〜4秒)に小気味よく繋ぎ、冗長や繰り返しは徹底的に削る。",
 ]
 
-def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
-    segments_with_time = ""
-    for seg in cleaned_segments:
-        segments_with_time += f"[{seg['start']:.1f}秒〜{seg['end']:.1f}秒] {seg['text']}\n"
+def _short_rules(duration):
+    return f"""【シーン選定の絶対ルール】（必ず守る）
+- 各シーンの start / end は、上記セグメントの [開始秒〜終了秒] の値とそのまま一致させる（途中の秒数で切らない）
+- セグメント1つ、または連続する複数セグメントをまとめて1シーンにする（区切りはセグメント境界のみ）
+- 文章・話が完結しているシーンを選ぶ（言い切りの途中で終わらせない）
+- 「えーと」「あの」などフィラーで始まるセグメントをシーンの先頭にしない
+- シーンは時系列順（startの昇順）、重複なし。start/end は 0以上{duration:.1f}以下
 
-    # 作り直し（もう一度生成）のとき：過去案を渡し、はっきり違う・より良い案を作らせる
+【良いショートの条件】（品質の軸）
+- 冒頭3秒で掴む：最もインパクト/結論/驚き/面白さのある場面から始める（前置き・自己紹介・状況説明・フィラー始まりは冒頭に置かない）
+- 一番の見どころ（面白い/価値ある/オチ）が必ず入っている
+- 退屈な部分・冗長な繰り返し・どうでもいい雑談は入れない
+- 起→展開→締めがあり、最後はちゃんと締めくくる（ぶつ切りにしない）
+- 全体30〜60秒目安（完結を最優先、必要なら前後してよい）"""
+
+def _clean_json(text):
+    return text.replace("```json", "").replace("```", "").strip()
+
+def generate_structure(cleaned_segments, duration, prev_choices=None):
+    """Sonnet best-of-3＋判定。3つの切り口で候補を作り、審査して最良の構成を選ぶ（コスパ良く高品質）。"""
+    seg = "".join(f"[{s['start']:.1f}秒〜{s['end']:.1f}秒] {s['text']}\n" for s in cleaned_segments)
+
     redo_block = ""
     if prev_choices:
-        past = "\n".join(
-            "案{}: {}".format(k, "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in ch) or "（なし）")
-            for k, ch in enumerate(prev_choices, 1))
-        redo_block = f"""
-【作り直し中】ユーザーは前の案に満足せず「もう一度生成」を押しました。下の過去案とは“はっきり違う”構成にしてください。
-- ❌禁止：「冒頭のシーンを削るだけ」「末尾を削るだけ」など前回の一部を削っただけの小さな違い
-- ✅必須：動画“全体”から場面を選び直す。前回入れた場面の一部を外し、前回入れていない別の場面を入れる
-- 選ぶ場面・順序の重み・テンポ・長さを変えて、見た目に“別の編集”だと分かるようにする
-- ただし「重要な見どころ・結末は残す／話が完結する」基本は守る
-過去に作った案（これらと明確に変える）:
-{past}
-"""
+        past = "\n".join("案{}: {}".format(k, "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in ch) or "（なし）")
+                         for k, ch in enumerate(prev_choices, 1))
+        redo_block = ("\n【作り直し】前の案と“はっきり違う”構成にする。冒頭/末尾を削るだけはNG。"
+                      "動画全体から場面を選び直し、入れる場面を入れ替える（重要な見どころと結末は残す）。\n"
+                      f"避ける過去案:\n{past}\n")
 
-    angle_block = f"\n{angle}\n" if angle else ""
+    rules = _short_rules(duration)
+    json_spec = '{"bgm_mood": "..", "scenes": [{"start": 0, "end": 0, "reason": "..", "transition": "cut（場面が大きく変わる所はfade）"}]}'
 
-    propose_prompt = f"""
-あなたはTikTok・Instagram・YouTubeショートのプロ編集者です。
-以下は{duration:.1f}秒の動画の音声テキストです。各行が1セグメントで、[開始秒〜終了秒]が付いています。
+    # 1) 3つの切り口で候補を作る（探索）。独立なので並列実行して短縮する
+    def _make_candidate(angle):
+        prompt = (f"あなたはTikTok/Reels/YouTubeショートのプロ編集者です。\n"
+                  f"以下は{duration:.1f}秒の動画の音声テキスト（各行が1セグメント、[開始秒〜終了秒]付き）です。\n\n{seg}\n"
+                  f"ここから「視聴者が最後まで見たくなる」縦型ショートを構成してください。\n{redo_block}\n"
+                  f"■今回の切り口：{angle}\n\n{rules}\n\n"
+                  f"JSONのみで出力（説明不要）:\n{json_spec}")
+        try:
+            msg = anthropic_client.messages.create(
+                model=STRUCTURE_MODEL, max_tokens=1500, temperature=0.8,
+                messages=[{"role": "user", "content": prompt}])
+            txt = _clean_json(msg.content[0].text)
+            return txt if json.loads(txt).get("scenes") else None
+        except Exception:
+            return None
 
-{segments_with_time}
+    with ThreadPoolExecutor(max_workers=len(CANDIDATE_ANGLES)) as ex:
+        candidates = [c for c in ex.map(_make_candidate, CANDIDATE_ANGLES) if c]
 
-この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画を構成してください。
-目的は「長い動画を、テンポよくカットして“ちゃんと完結した”ショート動画にする」こと。
-{redo_block}{angle_block}
+    if not candidates:
+        return '{"scenes": []}'
+    if len(candidates) == 1:
+        return candidates[0]
 
-【最も大切なこと】
-- 話の流れが最初から最後まで通っていること。起→展開→締めがあり、**途中でぶつ切りに終わらせない**
-- **重要な場面・面白い場面・結末（オチ/まとめ）は必ず残す**。長さを気にして大事な部分を削らない
-- 不要な部分（言い間違い、長い沈黙、冗長な繰り返し、どうでもいい雑談）は積極的に省いてテンポを上げる
-
-【シーン選定の絶対ルール】（必ず守る）
-- 各シーンの start / end は、上記セグメントの [開始秒〜終了秒] の値とそのまま一致させる。セグメントの途中の秒数で切らない
-- セグメント1つ、または連続する複数セグメントをまとめて1シーンにする（区切りはセグメント境界のみ）
-- 文章・話が完結しているシーンだけを選ぶ（言い切りの途中・文の途中で終わるシーンは選ばない）
-- 前後のシーンが話の流れとして自然につながるように選ぶ（脈絡なく飛ばさない）
-- 「えーと」「あの」「えー」などのフィラーで始まるセグメントはシーンの先頭にしない
-
-編集の鉄則：
-- 冒頭3秒で視聴者を引き込む（最もインパクトのある場面から始める）
-- テンポを保つ（だらだらさせない）。1シーンは目安2〜6秒、強調したい所だけ長めにして緩急をつける
-- シーンは時系列順に並べ、重複させない
-- **最後は必ず話の締めくくり（まとめ・結論・オチ）で終わる**
-- 全体の長さは30〜60秒を目安にする。ただし長さのために重要な場面や結末を削らない（完結を最優先し、必要なら短く/長くしてよい）
-
-演出の指示：
-- 動画全体に合うBGMのムード（bgm_mood）を1つ提案する（例：明るい / 感動的 / 緊張感 / おしゃれ / コミカル / 落ち着いた）
-- 各シーンの切り替え方（transition）を指定する。場面や感情が大きく変わる箇所は "fade"、テンポよく繋ぐ箇所は "cut"
-
-シーンの開始・終了秒数は必ず0以上{duration:.1f}以下にしてください。
-
-以下のJSON形式のみで答えてください。
-{{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
-"""
-
-    # 1回目：構成案を作る。作り直し時は温度を上げて前回より大きく変化させる
-    msg1 = anthropic_client.messages.create(
-        model=STRUCTURE_MODEL, max_tokens=1500,
-        messages=[{"role": "user", "content": propose_prompt}])
-    proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
-
-    # 毎回 自己レビューで磨く（ストーリー品質を最優先）。
-    # 方針(angle)は尊重して磨くので、再生成でも多少の違いは残る。
+    # 2) 3案を審査して最良を選び、必要なら最小限だけ直す（鋭い判定）
+    cand_block = "\n\n".join(f"## 候補{i+1}\n{c}" for i, c in enumerate(candidates))
+    judge_prompt = (f"あなたは厳しいショート動画の編集ディレクターです。同じ素材から作った{len(candidates)}つの構成案を比較し、"
+                    f"「最も良いショート動画になる案」を1つ選んでください。\n\n"
+                    f"# 音声テキスト（[開始秒〜終了秒]）\n{seg}\n# 構成案\n{cand_block}\n\n"
+                    "評価基準（重要な順）:\n"
+                    "1. 冒頭3秒で掴めているか（弱い導入・前置き始まりは大きく減点）\n"
+                    "2. 一番の見どころ・オチが入っているか\n"
+                    "3. 退屈/冗長/どうでもいい部分が無いか\n"
+                    "4. 起承転結で完結し、ぶつ切りでないか\n"
+                    "5. テンポが良いか\n\n"
+                    f"選んだ案をベースに、明らかな改善点だけ最小限直して「最終構成」を出す。\n{rules}\n\n"
+                    f"JSONのみで出力（説明不要）:\n{json_spec}")
     try:
-        msg2 = anthropic_client.messages.create(
-            model=STRUCTURE_MODEL, max_tokens=1500,
-            messages=[{"role": "user", "content": f"""
-あなたはプロのショート動画編集者です。以下は動画の音声テキストと、それに対するショート動画の構成案です。
-
-# 音声テキスト（[開始秒〜終了秒]）
-{segments_with_time}
-
-# 構成案（JSON）
-{proposal}
-
-この構成案を厳しくレビューし、より良いショート動画になるよう改善した「最終構成」を出してください。
-特に次を確認し、必要なら直す：
-- 冒頭3秒が最も惹きつける場面になっているか（弱ければ強い場面に差し替える）
-- 退屈な部分・冗長な繰り返し・どうでもいい雑談が混ざっていないか（あれば外す）
-- 一番の見どころ・面白い場面・結末（オチ/まとめ）が入っているか（抜けていれば足す）
-- 話が最初から最後まで自然につながり、途中でぶつ切りに終わっていないか
-- テンポが良いか（だらだらしていないか）
-
-厳守ルール：
-- start/end は必ず上記セグメントの[開始秒〜終了秒]の値と一致させる（途中で切らない）
-- start/end は0以上{duration:.1f}以下
-- シーンは時系列順（startの昇順）に並べる。重複させない
-- 構成案の「方針・場面の選び方」は尊重し、その方向で磨く（別の構成に作り替えない）
-- 改善が不要と判断したら構成案のままでよい
-
-以下のJSON形式のみで答えてください（他の文章は不要）。
-{{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
-"""}])
-        refined = msg2.content[0].text.replace("```json", "").replace("```", "").strip()
-        if json.loads(refined).get("scenes"):   # 妥当な改善版ならそれを採用
-            return refined
+        msg = anthropic_client.messages.create(
+            model=STRUCTURE_MODEL, max_tokens=1500, temperature=0.2,
+            messages=[{"role": "user", "content": judge_prompt}])
+        best = _clean_json(msg.content[0].text)
+        if json.loads(best).get("scenes"):
+            return best
     except Exception:
         pass
-    return proposal
+    return candidates[0]
 
 def remove_overlapping_scenes(scenes):
     scenes = sorted(scenes, key=lambda x: x["start"])
@@ -623,8 +596,7 @@ def _generate_and_build(job_id):
 
     job.update(status="生成中", progress=55)
     prev_choices = job.get("prev_choices", [])   # 過去に作った構成（作り直し時に「違う案」を出すため）
-    angle = EDIT_ANGLES[len(prev_choices) % len(EDIT_ANGLES)]   # 生成のたびに編集方針を変える
-    structure = generate_structure(cleaned, duration, prev_choices=prev_choices, angle=angle)
+    structure = generate_structure(cleaned, duration, prev_choices=prev_choices)
     scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
     # 今回採用した構成を記録（次の作り直しで重複を避ける）
     job.setdefault("prev_choices", []).append([(round(s["start"], 1), round(s["end"], 1)) for s in scenes])
