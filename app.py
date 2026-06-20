@@ -26,6 +26,26 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 jobs = {}
 
+def _resolve_font():
+    """字幕用の日本語フォントを環境に応じて探す（mac=ヒラギノ / Linux=Noto CJK）"""
+    import glob
+    candidates = [
+        os.environ.get("SUBTITLE_FONT", ""),
+        "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",   # macOS
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",   # Linux (fonts-noto-cjk)
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    for pat in ("/usr/share/fonts/**/NotoSansCJK*.*", "/usr/share/fonts/**/NotoSerifCJK*.*"):
+        hit = glob.glob(pat, recursive=True)
+        if hit:
+            return hit[0]
+    return None
+
+SUBTITLE_FONT = _resolve_font()
+
 def get_video_duration(video_path):
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path], capture_output=True, text=True)
     return float(result.stdout.strip())
@@ -428,7 +448,7 @@ def render_subtitle_png(text, w, h, path):
     draw = ImageDraw.Draw(img)
     font_size = 46
     try:
-        font = ImageFont.truetype("/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", font_size)
+        font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
     except:
         font = ImageFont.load_default()
     lines = wrap_text(text, font, int(w * 0.86), draw)

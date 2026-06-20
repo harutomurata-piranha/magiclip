@@ -1,5 +1,6 @@
-flask
-openai
-anthropic
-pillow
-python-dotenv
+flask>=3.1
+openai>=2.4
+anthropic>=0.109
+pillow>=11.0
+python-dotenv>=1.0
+gunicorn>=23.0

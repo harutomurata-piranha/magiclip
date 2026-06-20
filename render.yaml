@@ -1,0 +1,15 @@
+# Render デプロイ設定（MagiClip）
+# ffmpegと日本語フォントが必要なため Docker ランタイムを使用（Dockerfile を参照）
+services:
+  - type: web
+    name: magiclip
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore        # 日本から最も近いリージョン
+    plan: starter            # 動画処理はメモリを使うため free(512MB) では不足しがち。starter以上を推奨
+    healthCheckPath: /
+    envVars:
+      - key: OPENAI_API_KEY      # Whisper（文字起こし）用。Renderダッシュボードで値を設定
+        sync: false
+      - key: ANTHROPIC_API_KEY   # Claude（構成・校正）用。Renderダッシュボードで値を設定
+        sync: false
