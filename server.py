@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
-from video_processor import process_video, reedit, load_edit_data
+from video_processor import process_video, reedit_textbased, load_edit_data
 
 
 def create_app():
@@ -314,32 +314,34 @@ def create_app():
             return redirect(url_for("result", job_id=job_id))
 
         if request.method == "POST":
-            action = request.form.get("action")
-            scenes, texts = None, None
-            if action == "subtitles":
-                texts = [request.form.get(f"sub_{i}", "") for i in range(len(data["subtitles"]))]
-            elif action == "cuts":
-                keep = request.form.getlist("keep")          # 残すシーンのindex
-                scenes = [data["scenes"][int(i)] for i in keep if i.isdigit()]
-                if not scenes:
-                    flash("少なくとも1つのシーンを残してください。", "error")
-                    return redirect(url_for("edit", job_id=job_id))
+            # テキストベース編集：残した字幕（チェックON＆テキストあり）だけを集める。
+            # 字幕を消す＝その区間の映像も消える。
+            kept = []
+            for i, s in enumerate(data["subtitles"]):
+                if request.form.get(f"keep_{i}"):
+                    txt = (request.form.get(f"text_{i}") or "").strip()
+                    if txt:
+                        kept.append({"text": txt,
+                                     "orig_start": s.get("orig_start"),
+                                     "orig_end": s.get("orig_end")})
+            if not kept:
+                flash("少なくとも1つの字幕を残してください。", "error")
+                return redirect(url_for("edit", job_id=job_id))
             job.status = "処理中"
             db.session.commit()
-            threading.Thread(target=_run_reedit,
-                             args=(app, job_id, job.output_path, scenes, texts),
+            threading.Thread(target=_run_reedit, args=(app, job_id, job.output_path, kept),
                              daemon=True).start()
             return redirect(url_for("processing", job_id=job_id))
 
         return render_template("edit.html", job=job, data=data)
 
-    def _run_reedit(flask_app, job_id, output_path, scenes, subtitle_texts):
+    def _run_reedit(flask_app, job_id, output_path, kept_lines):
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
             db.session.commit()
             try:
-                reedit(output_path, scenes=scenes, subtitle_texts=subtitle_texts)
+                reedit_textbased(output_path, kept_lines)
                 job.status = "完成"
             except Exception:
                 job.status = "エラー"

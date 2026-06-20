@@ -120,38 +120,58 @@ def process_video(input_path, output_path, plan="free"):
     return output_path
 
 
-def reedit(output_path, scenes=None, subtitle_texts=None):
-    """プロ編集：カット（scenes）や字幕テキストを修正して再レンダリングする。
+def _find_scene(scenes, t):
+    for sc in scenes:
+        if sc["start"] - 0.05 <= t <= sc["end"] + 0.05:
+            return sc
+    return scenes[-1] if scenes else None
 
-    - scenes を渡す: そのシーン構成で動画を切り直し、字幕も作り直す（カット修正）
-    - subtitle_texts を渡す: 既存字幕のテキストだけ差し替えて焼き直す（字幕修正・タイミングは維持）
+
+def reedit_textbased(output_path, kept_lines):
+    """テキストベース編集（プロの魔法）：残した字幕から映像を切り直す。
+
+    kept_lines = [{"text","orig_start","orig_end"}]（消した字幕は含めない）。
+    「字幕を消す＝その区間の映像も消える」「字幕のテキストはユーザーの編集を保持」を実現する。
     """
     data = load_edit_data(output_path)
     if not data:
         raise RuntimeError("編集データが見つかりません")
     stem = _stem(output_path)
+
+    # 残った字幕の“元動画の時刻”を時系列に並べ、隣接（間が短い）ものは1シーンにまとめる
+    items = sorted([l for l in kept_lines
+                    if l.get("orig_start") is not None and l.get("orig_end") is not None],
+                   key=lambda x: x["orig_start"])
+    if not items:
+        raise RuntimeError("残す字幕がありません")
+
+    MERGE_GAP = 0.6  # この秒数以内で隣り合う字幕は切らずに繋ぐ（不要なカットを増やさない）
+    scenes = []
+    for it in items:
+        s, e = float(it["orig_start"]), float(it["orig_end"])
+        if scenes and s - scenes[-1]["end"] <= MERGE_GAP:
+            scenes[-1]["end"] = max(scenes[-1]["end"], e)
+        else:
+            scenes.append({"start": s, "end": e, "transition": "cut"})
+
     cut_path = stem + "_cut.mp4"
+    E.edit_video(data["input_path"], scenes, cut_path)   # ここで out_start/out_end が付く
 
-    if scenes is not None:
-        # カットを変えた → 切り直して字幕も作り直す
-        E.edit_video(data["input_path"], scenes, cut_path)
-        subtitles = _build_subtitles(data["words"], scenes, data["cleaned"])
-        data["scenes"] = [{"start": s["start"], "end": s["end"],
-                           "transition": s.get("transition", "cut")} for s in scenes]
-        data["subtitles"] = subtitles
-    else:
-        subtitles = data["subtitles"]
+    # 残した字幕を新タイムラインに再配置（ユーザーが直したテキストを保持）
+    subs = []
+    for it in items:
+        s, e = float(it["orig_start"]), float(it["orig_end"])
+        sc = _find_scene(scenes, s)
+        if not sc:
+            continue
+        ns = max(sc["out_start"], min(s - sc["start"] + sc["out_start"], sc["out_end"]))
+        ne = max(ns, min(e - sc["start"] + sc["out_start"], sc["out_end"]))
+        subs.append({"start": ns, "end": ne, "text": it["text"],
+                     "orig_start": s, "orig_end": e})
+    subs.sort(key=lambda x: x["start"])
 
-    if subtitle_texts is not None:
-        # 字幕テキストだけ差し替え（タイミングは維持、空行は表示しない）
-        new_subs = []
-        for s, txt in zip(subtitles, subtitle_texts):
-            txt = (txt or "").strip()
-            if txt:
-                new_subs.append({"start": s["start"], "end": s["end"], "text": txt})
-        subtitles = new_subs
-        data["subtitles"] = subtitles
-
-    _finalize(cut_path, subtitles, data["bgm_mood"], stem, output_path)
+    _finalize(cut_path, subs, data["bgm_mood"], stem, output_path)
+    data["scenes"] = scenes
+    data["subtitles"] = subs
     _save_data(output_path, data)
     return output_path

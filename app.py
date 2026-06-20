@@ -411,7 +411,8 @@ def correct_segments(segments, reference=""):
     corrected = []
     for i, seg in enumerate(segments):
         text = parsed.get(i, "").strip() or seg["text"].strip()
-        corrected.append({"start": seg["start"], "end": seg["end"], "text": text})
+        corrected.append({"start": seg["start"], "end": seg["end"], "text": text,
+                          "orig_start": seg.get("orig_start"), "orig_end": seg.get("orig_end")})
     return corrected
 
 PAUSE_SPLIT = 0.4    # 単語間がこれ以上空いたら「話の区切り」→字幕を分ける（音声と同期させる肝）
@@ -434,7 +435,9 @@ def build_word_cues(words, scenes):
             if text and c_start is not None:
                 cs = max(out_s, min(c_start - s + out_s, out_e))   # シーン区間にクランプ（負値・はみ出し防止）
                 ce = max(cs, min(c_end - s + out_s, out_e))
-                cues.append({"start": cs, "end": ce, "text": text})
+                # orig_start/orig_end = 元動画上の時刻（テキストベース編集でカット位置を割り出すのに使う）
+                cues.append({"start": cs, "end": ce, "text": text,
+                             "orig_start": c_start, "orig_end": c_end})
             cur, c_start, c_end = "", None, None
 
         for w in words:

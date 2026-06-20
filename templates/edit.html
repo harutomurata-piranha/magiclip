@@ -1,48 +1,48 @@
 {% extends "base.html" %}
-{% block title %}プロ編集 - MagiClip{% endblock %}
+{% block title %}テキスト編集 - MagiClip{% endblock %}
 {% block content %}
-<h1>プロ編集 ✏️</h1>
-<p class="muted">完成した動画を確認しながら、字幕の誤字直しや不要なカットの削除ができます。修正後に再レンダリングされます。</p>
+<h1>テキストで編集 ✨</h1>
+<p class="muted">字幕を直すだけ。<b>不要な行を消すと、その映像も自動でカット</b>されます。台本を編集する感覚でどうぞ。</p>
 
-<div style="display:grid;grid-template-columns:1fr 1.3fr;gap:24px;align-items:start">
+<div style="display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start">
   <div>
-    <video src="{{ url_for('video', job_id=job.id) }}" controls muted playsinline></video>
+    <video src="{{ url_for('video', job_id=job.id) }}?v={{ data.subtitles|length }}" controls muted playsinline></video>
     <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
   </div>
 
-  <div>
-    <!-- 字幕の修正 -->
-    <div class="panelbox" style="text-align:left;margin-bottom:18px">
-      <h3 style="margin-top:0">字幕の修正</h3>
-      <p class="muted" style="font-size:13px">誤字を直したり、不要な字幕は空欄にすると消えます。</p>
-      <form method="post" action="{{ url_for('edit', job_id=job.id) }}">
-        <input type="hidden" name="action" value="subtitles">
-        {% for s in data.subtitles %}
-        <div style="display:flex;gap:8px;align-items:center;margin:6px 0">
-          <span class="muted" style="font-size:12px;min-width:46px">{{ '%.1f'|format(s.start) }}s</span>
-          <input type="text" name="sub_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1">
-        </div>
-        {% endfor %}
-        <button class="btn" type="submit" style="margin-top:14px">字幕を反映して再レンダリング</button>
-      </form>
+  <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
+    <div id="lines">
+      {% for s in data.subtitles %}
+      <div class="line" data-i="{{ loop.index0 }}"
+           style="display:flex;gap:10px;align-items:center;margin:8px 0">
+        <input type="checkbox" name="keep_{{ loop.index0 }}" checked hidden>
+        <button type="button" class="del" title="この行と映像を削除"
+                style="border:1px solid var(--line);background:var(--panel2);color:var(--muted);
+                       border-radius:8px;width:34px;height:38px;cursor:pointer;flex:none">🗑</button>
+        <span class="muted" style="font-size:12px;min-width:42px">{{ '%.1f'|format(s.start) }}s</span>
+        <input type="text" name="text_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1">
+      </div>
+      {% endfor %}
     </div>
-
-    <!-- カットの修正 -->
-    <div class="panelbox" style="text-align:left">
-      <h3 style="margin-top:0">カットの修正</h3>
-      <p class="muted" style="font-size:13px">チェックを外したシーンは動画から削除されます（字幕も作り直します）。</p>
-      <form method="post" action="{{ url_for('edit', job_id=job.id) }}">
-        <input type="hidden" name="action" value="cuts">
-        {% for sc in data.scenes %}
-        <label style="display:flex;gap:10px;align-items:center;margin:6px 0;font-size:14px">
-          <input type="checkbox" name="keep" value="{{ loop.index0 }}" checked style="width:auto">
-          <span class="muted" style="font-size:12px;min-width:78px">{{ '%.1f'|format(sc.start) }}–{{ '%.1f'|format(sc.end) }}s</span>
-          <span>{{ sc.reason or 'シーン %s'|format(loop.index) }}</span>
-        </label>
-        {% endfor %}
-        <button class="btn btn-ghost" type="submit" style="margin-top:14px">カットを反映して再レンダリング</button>
-      </form>
-    </div>
-  </div>
+    <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
+    <p class="muted" style="font-size:12px;margin-top:8px">※ 文章の途中で切らず、字幕（発話のかたまり）単位で編集します。</p>
+  </form>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // 🗑 で行を「削除」状態に（チェックを外し、見た目を薄く）。もう一度押すと戻る。
+  document.querySelectorAll('.line').forEach(line => {
+    const cb = line.querySelector('input[type=checkbox]');
+    const txt = line.querySelector('input[type=text]');
+    const btn = line.querySelector('.del');
+    btn.onclick = () => {
+      cb.checked = !cb.checked;
+      const removed = !cb.checked;
+      line.style.opacity = removed ? .4 : 1;
+      txt.style.textDecoration = removed ? 'line-through' : 'none';
+      btn.textContent = removed ? '↩' : '🗑';
+    };
+  });
+</script>
 {% endblock %}
