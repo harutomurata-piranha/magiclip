@@ -1,55 +1,157 @@
 """
 AI編集エンジン（差し替え可能な層）。
 
-ビジネスの「箱」からはこの process_video() だけを呼ぶ。
-今はダミー（処理済みっぽい動画を返すだけ）。
-あとで本物のAI編集エンジン（app.py 相当のロジック）をここに移植して差し替える。
+ビジネスの「箱」(server.py)からはこの3つだけを使う:
+  - process_video(input_path, output_path, plan)  … 全自動編集（一般プラン）
+  - load_edit_data(output_path)                   … プロ編集用に保存したデータを読む
+  - reedit(output_path, scenes=None, subtitle_texts=None) … プロの字幕/カット修正→再レンダリング
+
+中身は app.py（テスト済みの本物パイプライン）の関数を再利用している。
 """
 import os
-import shutil
-import subprocess
+import re
+import json
+from types import SimpleNamespace
+
+import app as E  # 既存の本物エンジン（関数を再利用。__main__ガードがあるのでサーバは起動しない）
+
+_FRAG = re.compile(r'^[぀-ゟ゠-ヿ]$')   # 単独かな1文字（断片）
 
 
-def _has_ffmpeg():
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        return True
-    except Exception:
-        return False
+def _stem(output_path):
+    return os.path.splitext(output_path)[0]
 
 
+def _data_path(output_path):
+    return _stem(output_path) + "_edit.json"
+
+
+# ---------------- パイプラインの部品 ----------------
+def _transcribe_and_plan(input_path, stem):
+    """文字起こし → AIで構成（見どころ選定）。再編集で使う素材も返す。"""
+    audio = stem + "_audio.mp3"
+    duration = E.get_video_duration(input_path)
+    E.extract_audio(input_path, audio)
+    transcript = E.transcribe_audio(audio)
+    cleaned = E.clean_segments(transcript)
+    structure = E.generate_structure(cleaned, duration)
+    scenes, bgm_mood = E.parse_scenes(structure, cleaned, duration)
+    words = [{"start": getattr(w, "start", None), "end": getattr(w, "end", None), "word": w.word}
+             for w in transcript.words]
+    return scenes, bgm_mood, words, cleaned, duration
+
+
+def _word_objs(words):
+    return [SimpleNamespace(**w) for w in words]
+
+
+def _build_subtitles(words, scenes, cleaned):
+    """編集後のシーンに合わせて字幕を作る（原音声マッピング→AI簡潔化→仕上げ）。"""
+    cues = E.build_word_cues(_word_objs(words), scenes)
+    reference = " ".join(s["text"].strip() for s in cleaned)
+    subs = E.correct_segments(cues, reference=reference)
+    for s in subs:
+        s["text"] = E.strip_punct(E.sanitize_caption(s["text"]))
+    return [s for s in subs if s["text"] and not _FRAG.match(s["text"])]
+
+
+def _finalize(cut_path, subtitles, bgm_mood, stem, output_path):
+    """カット済み動画に字幕を焼き込み、BGMをミックスして完成。"""
+    srt = stem + "_subtitles.srt"
+    subtitled = stem + "_subtitled.mp4"
+    E.create_srt(subtitles, srt)
+    E.burn_subtitles(cut_path, subtitles, subtitled)
+    bgm_path, _ = E.get_bgm(bgm_mood)
+    if bgm_path and E.mix_bgm(subtitled, bgm_path, output_path):
+        if os.path.exists(subtitled):
+            os.remove(subtitled)
+    else:
+        os.replace(subtitled, output_path)
+    return output_path
+
+
+def _save_data(output_path, data):
+    with open(_data_path(output_path), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def load_edit_data(output_path):
+    """プロ編集画面用：保存しておいた scenes / subtitles / bgm 等を読む（無ければNone）。"""
+    p = _data_path(output_path)
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ---------------- 公開API ----------------
 def process_video(input_path, output_path, plan="free"):
-    """動画を編集して output_path に書き出す。
+    """全自動編集（一般プラン）。完成動画を output_path に書き出す。
 
-    引数:
-        input_path : アップロードされた元動画のパス
-        output_path: 完成動画の書き出し先パス
-        plan       : ユーザーのプラン（"free" / "payg" / "monthly"）。
-                     将来、プランごとに画質・長さ・透かしの有無などを変えるためのフック。
-
-    返り値: output_path
-
-    ※今はダミー実装。ffmpegがあれば「縦型・先頭30秒」に整形して“処理した感”を出し、
-      無ければ単純コピーする。本物のAI編集は後でここに差し替える。
+    プロプランでも同じ完成品を出しつつ、後で字幕/カットを修正できるよう素材を保存する。
     """
+    stem = _stem(output_path)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    if _has_ffmpeg():
-        try:
-            # ダミーの“編集”：先頭30秒を縦型(1080x1920)に整形。本物エンジン差し替え時にこの中身を置換する。
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", input_path, "-t", "30",
-                    "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
-                           "crop=1080:1920",
-                    "-c:a", "aac", "-c:v", "libx264", "-preset", "veryfast",
-                    output_path,
-                ],
-                capture_output=True, check=True,
-            )
-            return output_path
-        except Exception:
-            pass  # ffmpegが失敗したらコピーにフォールバック
+    scenes, bgm_mood, words, cleaned, duration = _transcribe_and_plan(input_path, stem)
 
-    shutil.copy(input_path, output_path)
+    # 見どころが取れなかった等の保険：シーンが無ければ素のコピーを返す
+    if not scenes:
+        import shutil
+        shutil.copy(input_path, output_path)
+        return output_path
+
+    cut_path = stem + "_cut.mp4"
+    E.edit_video(input_path, scenes, cut_path)   # ここで scenes に out_start/out_end が付く
+    subtitles = _build_subtitles(words, scenes, cleaned)
+    _finalize(cut_path, subtitles, bgm_mood, stem, output_path)
+
+    # プロ編集用に素材を保存（字幕テキスト修正・カット削除→再レンダリングに使う）
+    _save_data(output_path, {
+        "input_path": input_path,
+        "bgm_mood": bgm_mood,
+        "words": words,
+        "cleaned": [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in cleaned],
+        "scenes": [{"start": s["start"], "end": s["end"],
+                    "transition": s.get("transition", "cut"),
+                    "reason": s.get("reason", "")} for s in scenes],
+        "subtitles": subtitles,
+    })
+    return output_path
+
+
+def reedit(output_path, scenes=None, subtitle_texts=None):
+    """プロ編集：カット（scenes）や字幕テキストを修正して再レンダリングする。
+
+    - scenes を渡す: そのシーン構成で動画を切り直し、字幕も作り直す（カット修正）
+    - subtitle_texts を渡す: 既存字幕のテキストだけ差し替えて焼き直す（字幕修正・タイミングは維持）
+    """
+    data = load_edit_data(output_path)
+    if not data:
+        raise RuntimeError("編集データが見つかりません")
+    stem = _stem(output_path)
+    cut_path = stem + "_cut.mp4"
+
+    if scenes is not None:
+        # カットを変えた → 切り直して字幕も作り直す
+        E.edit_video(data["input_path"], scenes, cut_path)
+        subtitles = _build_subtitles(data["words"], scenes, data["cleaned"])
+        data["scenes"] = [{"start": s["start"], "end": s["end"],
+                           "transition": s.get("transition", "cut")} for s in scenes]
+        data["subtitles"] = subtitles
+    else:
+        subtitles = data["subtitles"]
+
+    if subtitle_texts is not None:
+        # 字幕テキストだけ差し替え（タイミングは維持、空行は表示しない）
+        new_subs = []
+        for s, txt in zip(subtitles, subtitle_texts):
+            txt = (txt or "").strip()
+            if txt:
+                new_subs.append({"start": s["start"], "end": s["end"], "text": txt})
+        subtitles = new_subs
+        data["subtitles"] = subtitles
+
+    _finalize(cut_path, subtitles, data["bgm_mood"], stem, output_path)
+    _save_data(output_path, data)
     return output_path

@@ -69,6 +69,7 @@ class Job(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     filename = db.Column(db.String(255))
     status = db.Column(db.String(20), default="待機中")        # 待機中/処理中/完成/エラー
+    mode = db.Column(db.String(10), default="auto")            # auto=一般(全自動) / pro=プロ(編集可)
     output_path = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

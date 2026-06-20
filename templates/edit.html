@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}プロ編集 - MagiClip{% endblock %}
+{% block content %}
+<h1>プロ編集 ✏️</h1>
+<p class="muted">完成した動画を確認しながら、字幕の誤字直しや不要なカットの削除ができます。修正後に再レンダリングされます。</p>
+
+<div style="display:grid;grid-template-columns:1fr 1.3fr;gap:24px;align-items:start">
+  <div>
+    <video src="{{ url_for('video', job_id=job.id) }}" controls muted playsinline></video>
+    <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
+  </div>
+
+  <div>
+    <!-- 字幕の修正 -->
+    <div class="panelbox" style="text-align:left;margin-bottom:18px">
+      <h3 style="margin-top:0">字幕の修正</h3>
+      <p class="muted" style="font-size:13px">誤字を直したり、不要な字幕は空欄にすると消えます。</p>
+      <form method="post" action="{{ url_for('edit', job_id=job.id) }}">
+        <input type="hidden" name="action" value="subtitles">
+        {% for s in data.subtitles %}
+        <div style="display:flex;gap:8px;align-items:center;margin:6px 0">
+          <span class="muted" style="font-size:12px;min-width:46px">{{ '%.1f'|format(s.start) }}s</span>
+          <input type="text" name="sub_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1">
+        </div>
+        {% endfor %}
+        <button class="btn" type="submit" style="margin-top:14px">字幕を反映して再レンダリング</button>
+      </form>
+    </div>
+
+    <!-- カットの修正 -->
+    <div class="panelbox" style="text-align:left">
+      <h3 style="margin-top:0">カットの修正</h3>
+      <p class="muted" style="font-size:13px">チェックを外したシーンは動画から削除されます（字幕も作り直します）。</p>
+      <form method="post" action="{{ url_for('edit', job_id=job.id) }}">
+        <input type="hidden" name="action" value="cuts">
+        {% for sc in data.scenes %}
+        <label style="display:flex;gap:10px;align-items:center;margin:6px 0;font-size:14px">
+          <input type="checkbox" name="keep" value="{{ loop.index0 }}" checked style="width:auto">
+          <span class="muted" style="font-size:12px;min-width:78px">{{ '%.1f'|format(sc.start) }}–{{ '%.1f'|format(sc.end) }}s</span>
+          <span>{{ sc.reason or 'シーン %s'|format(loop.index) }}</span>
+        </label>
+        {% endfor %}
+        <button class="btn btn-ghost" type="submit" style="margin-top:14px">カットを反映して再レンダリング</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

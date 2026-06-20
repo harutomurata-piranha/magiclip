@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
-from video_processor import process_video
+from video_processor import process_video, reedit, load_edit_data
 
 
 def create_app():
@@ -236,7 +236,8 @@ def create_app():
             out_path = os.path.join(config.OUTPUT_FOLDER, f"{job_id}_output.mp4")
             file.save(in_path)
 
-            job = Job(id=job_id, user_id=current_user.id, filename=safe, status="待機中")
+            mode = "pro" if request.form.get("mode") == "pro" else "auto"
+            job = Job(id=job_id, user_id=current_user.id, filename=safe, status="待機中", mode=mode)
             db.session.add(job)
             current_user.consume_credit(no_limit=config.NO_LIMIT)  # 1本消費（開発/月額は減らない）
             db.session.commit()
@@ -301,6 +302,48 @@ def create_app():
             abort(404)
         return send_file(job.output_path, as_attachment=True,
                          download_name=f"magiclip_{job_id}.mp4")
+
+    # ---------------- プロ編集（字幕・カット修正）----------------
+    @app.route("/edit/<job_id>", methods=["GET", "POST"])
+    @login_required
+    def edit(job_id):
+        job = _owned_job(job_id)
+        data = load_edit_data(job.output_path) if job.output_path else None
+        if not data:
+            flash("この動画には編集データがありません。", "error")
+            return redirect(url_for("result", job_id=job_id))
+
+        if request.method == "POST":
+            action = request.form.get("action")
+            scenes, texts = None, None
+            if action == "subtitles":
+                texts = [request.form.get(f"sub_{i}", "") for i in range(len(data["subtitles"]))]
+            elif action == "cuts":
+                keep = request.form.getlist("keep")          # 残すシーンのindex
+                scenes = [data["scenes"][int(i)] for i in keep if i.isdigit()]
+                if not scenes:
+                    flash("少なくとも1つのシーンを残してください。", "error")
+                    return redirect(url_for("edit", job_id=job_id))
+            job.status = "処理中"
+            db.session.commit()
+            threading.Thread(target=_run_reedit,
+                             args=(app, job_id, job.output_path, scenes, texts),
+                             daemon=True).start()
+            return redirect(url_for("processing", job_id=job_id))
+
+        return render_template("edit.html", job=job, data=data)
+
+    def _run_reedit(flask_app, job_id, output_path, scenes, subtitle_texts):
+        with flask_app.app_context():
+            job = db.session.get(Job, job_id)
+            job.status = "処理中"
+            db.session.commit()
+            try:
+                reedit(output_path, scenes=scenes, subtitle_texts=subtitle_texts)
+                job.status = "完成"
+            except Exception:
+                job.status = "エラー"
+            db.session.commit()
 
     def _owned_job(job_id):
         job = db.session.get(Job, job_id)

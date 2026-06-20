@@ -7,8 +7,12 @@
   <video src="{{ url_for('video', job_id=job.id) }}" controls autoplay muted playsinline></video>
   <div class="center" style="margin-top:14px">
     <a class="btn" href="{{ url_for('download', job_id=job.id) }}">⬇️ ダウンロード</a>
+    {% if job.mode == 'pro' %}
+      <a class="btn btn-ghost" href="{{ url_for('edit', job_id=job.id) }}">✏️ 字幕・カットを修正</a>
+    {% endif %}
     <a class="btn btn-ghost" href="{{ url_for('upload') }}">もう1本作る</a>
   </div>
+  {% if job.mode == 'pro' %}<p class="muted" style="font-size:13px">プロ編集：字幕の誤字直しや不要なカットの削除ができます。</p>{% endif %}
 </div>
 <p class="center"><a class="muted" href="{{ url_for('mypage') }}">← マイページに戻る</a></p>
 {% endblock %}
