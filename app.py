@@ -105,6 +105,9 @@ def clean_segments(transcript):
         cleaned.append({"start": segment.start, "end": segment.end, "text": text})
     return cleaned
 
+# 構成（シーン選定）は判断力の高い Opus を使う。字幕校正は sonnet のまま（コスト抑制）
+STRUCTURE_MODEL = "claude-opus-4-8"
+
 # 「もう一度生成」のたびに切り替える編集方針（毎回ちがう“切り口”の編集に見せる）
 EDIT_ANGLES = [
     "",  # 1本目：標準（バランス重視）
@@ -178,8 +181,7 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
 
     # 1回目：構成案を作る。作り直し時は温度を上げて前回より大きく変化させる
     msg1 = anthropic_client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1500,
-        temperature=0.9 if prev_choices else 0.7,
+        model=STRUCTURE_MODEL, max_tokens=1500,
         messages=[{"role": "user", "content": propose_prompt}])
     proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
 
@@ -187,7 +189,7 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
     # 方針(angle)は尊重して磨くので、再生成でも多少の違いは残る。
     try:
         msg2 = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1500, temperature=0.3,
+            model=STRUCTURE_MODEL, max_tokens=1500,
             messages=[{"role": "user", "content": f"""
 あなたはプロのショート動画編集者です。以下は動画の音声テキストと、それに対するショート動画の構成案です。
 
