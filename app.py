@@ -413,20 +413,19 @@ def correct_segments(segments, reference=""):
         corrected.append({"start": seg["start"], "end": seg["end"], "text": text})
     return corrected
 
-CUE_MAX_CHARS = 16   # ソフト上限：この辺で"自然な区切り"が来たら切る（短め＝綺麗で読みやすい）
-CUE_HARD_CHARS = 30  # ハード上限：これを超えたら強制的に切る（暴走防止）
-CUE_MAX_DUR = 4.5    # 1キューの最大表示秒数
-# この文字の直後なら切ってよい（助詞・終助詞・句読点）。単語の途中で切らないための判定に使う
-_NATURAL_BREAK = set("、。！？はがをにへとでもやのねよさわなぞね") | set("。")
+PAUSE_SPLIT = 0.4    # 単語間がこれ以上空いたら「話の区切り」→字幕を分ける（音声と同期させる肝）
+CUE_MAX_DUR = 8.0    # 1キューの最大表示秒数（暴走防止の安全網。通常は"間"で切れる）
+CUE_HARD_CHARS = 40  # 1キューの最大文字数（暴走防止の安全網。通常はここまで来ない）
 
 def build_word_cues(words, scenes):
-    """原音声の単語タイムスタンプを編集後タイムラインへマッピングして字幕を作る（v3方式：テキスト品質が高い）。
+    """原音声の単語タイムスタンプを編集後タイムラインへマッピングして字幕を作る。
+    字幕は「実際に喋りが止まった所（間）」と「文末」でだけ区切る → 音声と同期し、改行も自然になる。
     各キューは所属シーンの編集後区間[out_start,out_end]にクランプし、ズレがシーンを越えて広がらないようにする。"""
     cues = []
     for scene in scenes:
         s, e = scene["start"], scene["end"]
         out_s, out_e = scene["out_start"], scene["out_end"]
-        cur, c_start, c_end = "", None, None
+        cur, c_start, c_end, prev_end = "", None, None, None
 
         def emit():
             nonlocal cur, c_start, c_end
@@ -444,16 +443,18 @@ def build_word_cues(words, scenes):
             token = w.word
             if token.strip("、。．！？!?・ 　") in FILLER_TOKENS:   # フィラー語は表示しない
                 continue
+            we = getattr(w, "end", ws)
+            # 直前の単語との間が空いていたら「話の区切り」→ ここまでを確定（音声に同期して切り替える）
+            if c_start is not None and prev_end is not None and (ws - prev_end) >= PAUSE_SPLIT:
+                emit()
             if c_start is None:
                 c_start = ws
             cur += token
-            c_end = max(getattr(w, "end", ws), c_start)
-            last = cur.rstrip("　 ")[-1:]
-            end_punct = token.rstrip().endswith(("。", "、", "．", "！", "？", "!", "?"))
-            # 文末で切る／表示が長すぎる／ハード上限超え／ソフト上限を超えていて"自然な区切り"に来た
-            if (end_punct or (c_end - c_start) >= CUE_MAX_DUR
-                    or len(cur) >= CUE_HARD_CHARS
-                    or (len(cur) >= CUE_MAX_CHARS and last in _NATURAL_BREAK)):
+            c_end = max(we, c_start)
+            prev_end = we
+            # 文末、または安全網（長すぎ）で確定。文の途中（文字数）では切らない＝音声より先に進ませない
+            if (token.rstrip().endswith(("。", "．", "！", "？", "!", "?"))
+                    or (c_end - c_start) >= CUE_MAX_DUR or len(cur) >= CUE_HARD_CHARS):
                 emit()
         emit()
 
@@ -553,7 +554,7 @@ def render_subtitle_png(text, w, h, path):
         font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
     except:
         font = ImageFont.load_default()
-    lines = wrap_text(text, font, int(w * 0.86), draw)
+    lines = wrap_text(text, font, int(w * 0.90), draw)
     line_height = font_size + 12
     start_y = h - 140 - line_height * len(lines)
     for line in lines:
