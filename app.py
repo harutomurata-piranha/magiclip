@@ -606,6 +606,8 @@ def process_phase_build(job_id, selected_indices, texts):
         job = jobs[job_id]
         job.update(status="生成中", progress=75)
         cand = job["candidates"]
+        job["last_selected"] = list(selected_indices)   # やり直し用に前回の編集内容を保持
+        job["last_texts"] = list(texts)
         video_path = job["video_path"]
         bgm_mood = job.get("bgm_mood", "")
         output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
@@ -693,7 +695,10 @@ HTML = """
         .progress-fill { background: #fff; height: 100%; border-radius: 100px; transition: width 0.3s; }
         .status-text { color: #888; font-size: 14px; text-align: center; }
         .download-area { display: none; margin-top: 32px; text-align: center; }
-        .download-btn { display: inline-block; padding: 16px 32px; background: #22c55e; color: #fff; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 16px; }
+        .preview-video { width: 100%; max-height: 60vh; border-radius: 12px; background: #000; }
+        .download-btn { display: inline-block; padding: 14px 24px; background: #22c55e; color: #fff; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 15px; }
+        .btn-secondary { padding: 14px 24px; background: #222; color: #fff; border: 1px solid #444; border-radius: 12px; font-weight: 600; font-size: 15px; cursor: pointer; }
+        .btn-secondary:hover { background: #2c2c2c; }
         .file-name { margin-top: 16px; color: #aaa; font-size: 14px; }
         .error-area { display: none; margin-top: 32px; padding: 16px; background: #2a1a1a; border-radius: 12px; color: #f87171; font-size: 14px; }
         .edit-area { display: none; margin-top: 28px; }
@@ -743,8 +748,12 @@ HTML = """
         <button class="btn" id="sceneBtn" onclick="submitScenes()">この内容で動画を作成</button>
     </div>
     <div class="download-area" id="downloadArea">
-        <p style="color:#22c55e; font-size:18px; font-weight:600; margin-bottom:16px">✅ 完成しました！</p>
-        <a class="download-btn" id="downloadBtn" href="#">⬇️ 動画をダウンロード</a>
+        <p style="color:#22c55e; font-size:18px; font-weight:600; margin-bottom:16px">✅ 完成しました！プレビューで確認できます</p>
+        <video id="previewVideo" class="preview-video" controls playsinline></video>
+        <div style="margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+            <a class="download-btn" id="downloadBtn" href="#">⬇️ ダウンロード</a>
+            <button class="btn-secondary" id="reEditBtn" onclick="reEdit()">✏️ 編集に戻ってやり直す</button>
+        </div>
     </div>
     <div class="error-area" id="errorArea"></div>
 </div>
@@ -787,8 +796,11 @@ function pollStatus() {
             showSceneSelector();
         } else if (data.status === '完成') {
             clearInterval(interval);
-            document.getElementById('downloadArea').style.display = 'block';
+            const v = document.getElementById('previewVideo');
+            v.src = '/video/' + jobId + '?t=' + Date.now();   // 毎回最新を読む
+            v.load();
             document.getElementById('downloadBtn').href = '/download/' + jobId;
+            document.getElementById('downloadArea').style.display = 'block';
             document.getElementById('uploadBtn').disabled = false;
         } else if (data.status === 'エラー') {
             clearInterval(interval);
@@ -857,6 +869,14 @@ async function submitScenes() {
     });
     pollStatus();
 }
+
+function reEdit() {
+    const v = document.getElementById('previewVideo');
+    v.pause();
+    document.getElementById('downloadArea').style.display = 'none';
+    document.getElementById('sceneBtn').disabled = false;
+    showSceneSelector();   // /scenes は前回の編集内容を反映して返す
+}
 </script>
 </body>
 </html>
@@ -878,10 +898,17 @@ def upload():
 
 @app.route("/scenes/<job_id>")
 def get_scenes(job_id):
-    """シーン選択待ちのジョブの、候補シーン一覧（AIおすすめ選択付き）を返す"""
+    """候補シーン一覧を返す。やり直し時は前回の編集内容（選択・テキスト）を反映する。"""
     job = jobs.get(job_id, {})
-    return jsonify({"scenes": [{"start": c["start"], "end": c["end"], "text": c["text"], "selected": c["selected"]}
-                               for c in job.get("candidates", [])]})
+    cand = job.get("candidates", [])
+    last_texts = job.get("last_texts")
+    last_selected = job.get("last_selected")
+    out = []
+    for i, c in enumerate(cand):
+        text = last_texts[i] if (last_texts and i < len(last_texts) and isinstance(last_texts[i], str)) else c["text"]
+        selected = (i in last_selected) if last_selected is not None else c["selected"]
+        out.append({"start": c["start"], "end": c["end"], "text": text, "selected": selected})
+    return jsonify({"scenes": out})
 
 @app.route("/thumb/<job_id>/<int:idx>")
 def thumb(job_id, idx):
@@ -893,15 +920,24 @@ def thumb(job_id, idx):
 
 @app.route("/select_scenes/<job_id>", methods=["POST"])
 def select_scenes(job_id):
-    """選んだシーン(indices)と編集テキストを受け取り、編集→字幕→焼き込み→完成を開始する"""
+    """選んだシーン(indices)と編集テキストを受け取り、編集→字幕→焼き込み→完成を開始する。
+    完成後でも（候補が残っていれば）やり直し再生成を受け付ける。"""
     job = jobs.get(job_id)
-    if not job or job.get("status") != "確認待ち":
+    if not job or "candidates" not in job:
         return jsonify({"error": "not ready"}), 400
     data = request.get_json(force=True) or {}
     selected = data.get("selected", [])
     texts = data.get("texts", [])
     threading.Thread(target=process_phase_build, args=(job_id, selected, texts)).start()
     return jsonify({"ok": True})
+
+@app.route("/video/<job_id>")
+def video(job_id):
+    """完成動画をブラウザ内プレビュー用に返す（ダウンロードではなくインライン再生）"""
+    job = jobs.get(job_id)
+    if job and job.get("status") == "完成" and os.path.exists(job.get("output", "")):
+        return send_file(job["output"], mimetype="video/mp4", conditional=True)
+    return "Not found", 404
 
 @app.route("/status/<job_id>")
 def status(job_id):
