@@ -140,12 +140,13 @@ STRUCTURE_MODEL = "claude-opus-4-8"
 
 def _shared_rules(duration):
     return f"""【編集の考え方（プロの編集）】
-動画の内容と文脈を理解し、"大事な所は全部残しつつ、無駄な所だけ削る"のがプロの編集です。
-短くすること自体は目的ではありません。削りすぎて大切な場面を失わないでください。
-- 一番の価値・見どころ・話のオチ・結末は必ず残す。長さのために重要な所を削らない
-- 削ってよいのは「明らかに不要な所」だけ：長い無音・余白、言い間違い、言い直し、フィラー、冗長な繰り返し、どうでもいい雑談、明らかな中だるみ
-- 判断に迷う場面は"残す"。価値があるか微妙でも、話の流れに必要なら残す
+動画の内容と文脈を理解し、"大切な場面は残し、無駄な所だけ削る"のがプロの編集です。
+判断の基準は「その場面が大切かどうか」。残す量や割合・尺は目的ではありません（多く残すこと自体が良いのではない）。
+- 大切な場面＝一番の価値・見どころ・話のオチ・結末・流れの理解に必要な所。これらは必ず残す
+- 重要でない無駄は遠慮なく削ってよい：長い無音・余白、言い間違い、言い直し、フィラー、冗長な繰り返し、どうでもいい雑談、中だるみ
+- 「大切な場面を削る」のも「無駄を残す」のも避ける。大切さで取捨を決める
 - 冒頭は惹きつける入りにする（弱い前置き・自己紹介・フィラーは外す）。ただし本題は削らない
+- ★テンポ：残した場面どうしが"気持ちよくテンポよく"つながる順序・組み合わせにする（流れがブツ切れ・もたつかない、リズムが出る）
 - 話の流れ・文脈が自然につながるようにし、途中でぶつ切りにせず、最後はちゃんと締める
 
 【素材の質の手がかり】（活用する）
@@ -157,7 +158,7 @@ def _shared_rules(duration):
 - 各シーンの start/end は、上の[開始秒〜終了秒]の値とそのまま一致させる（途中の秒で切らない）
 - 連続して話がつながるセグメントは1シーンにまとめてよい。"○秒の間"がある所はシーンを分ける
 - シーンは時系列順（startの昇順）、重複なし、start/end は 0以上{duration:.1f}以下
-- 尺は内容しだい。無駄を削った結果がそのまま長さでよく、短くするために大事な所は切らない（多くの場合、元の半分以上は残る）
+- 尺は結果でしかない。大切な場面を残し無駄を削った結果がそのまま長さになる（目標尺・目標割合は持たない）
 - bgm_mood は動画全体に合うムードを1つ。transition は基本"cut"、話題が大きく変わる所だけ"fade\""""
 
 def _structure_json(prompt, retries=2):
@@ -213,7 +214,8 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
     prompt = (f"あなたは一流のショート動画編集者です。動画の中身を理解した上で、プロが手がけたように編集してください。\n"
               f"以下は{duration:.1f}秒の動画の文字起こしです（各行=1セグメント、[開始秒〜終了秒]と、必要なら（注記）付き）。\n\n"
               f"{annotated}\n\n{analysis_block}{rules}\n{redo_block}\n"
-              f"分析で『必ず残すべき』とした重要な場面は確実に入れてください。短くすることが目的ではありません。\n"
+              f"分析で『必ず残すべき』とした重要な場面は確実に入れてください（採用率でなく『大切さ』で取捨）。\n"
+              f"そのうえで、残した場面がテンポよく気持ちよくつながるように構成してください。\n"
               f"以下のJSON形式のみで答えてください（他の文章は不要）。\n{JSON_SPEC}")
     return _structure_json(prompt) or '{"scenes": []}'
 
@@ -356,31 +358,36 @@ def mix_bgm(video_path, bgm_path, output_path, volume=0.15):
     ], capture_output=True)
     return result.returncode == 0
 
-def correct_segments(segments):
+def correct_segments(segments, reference=""):
     """字幕テキストを保守的に整える。ミスを増やさないことが最優先。
+    reference に動画全体の文字起こしを渡すと、文脈から崩れた語（数字・一般語）を直しやすくなる。
     入力・出力ともに [{start, end, text}] のリスト（タイミングは変えない）。"""
     if not segments:
         return []
     numbered = ""
     for i, seg in enumerate(segments):
         numbered += f"[{i}] {seg['text'].strip()}\n"
+    ref_block = (f"\n【参考：この動画全体の文字起こし】（崩れた語を直すヒント。数字・金額・一般語の取り違えはこれを根拠に直す。固有名詞は無理に変えない）\n{reference}\n"
+                 if reference else "")
     try:
         message = anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
+            model=STRUCTURE_MODEL,   # 字幕の誤字訂正も最高性能モデルで（品質最優先）
             max_tokens=2000,
             messages=[{"role": "user", "content": f"""
 以下は動画の音声を自動認識した日本語字幕です。各行の [i] 番号はそのまま残し、テキストを「読みやすい字幕」に整えてください。
+{ref_block}
 
 【整える内容】
+- ★明らかな誤字・脱字・変換ミスを直す（最重要）：自動認識にありがちな同音異義語の取り違えや変換ミスを、文脈から正しい語が明らかなものは直す
+  例：「以外と」→「意外と」、「いう事」→「いうこと」、「気ずく」→「気づく」、「下さい」→「ください」、「　」「打ち間違い」の脱字補完、助詞の取り違え（てにをは）など
 - 言い淀み・フィラーを削除する：「えーと」「あの」「その」「えー」「あ、」「まあ」「なんか」「こう」など
 - 不要なつなぎ言葉が文頭にあって読みにくければ削る：「で、」「あと、」「で」など（意味に必要なら残す）
-- 言い直し・直後の重複を1つにまとめる（例：「ローソン、ローソンが」→「ローソンが」、「郵便局、郵便局が」→「郵便局が」）
-- 明らかな誤字・脱字を直す（一般的な語のみ）
+- 言い直し・直後の重複を1つにまとめる（例：「ローソン、ローソンが」→「ローソンが」）
 - 句読点（。や、）は付けない。区切りが必要なら半角スペースで表現する（ショート動画の字幕スタイル）
 
 【守ること（ミスを増やさない）】
-- 店名・地名・人名などの固有名詞は、確信が持てなければ変更しない（推測で別の漢字・別の語に置き換えない）
-- 話の意味を変えない。情報を足さない。勝手に要約・短縮しない（フィラー/重複の除去はOK）
+- 店名・地名・人名などの固有名詞は、確信が持てなければ変更しない（推測で別の漢字・別の語に置き換えない）。ただし固有名詞"以外"の一般語の明らかな誤字は積極的に直してよい
+- 話の意味を変えない。情報を足さない。勝手に要約・短縮しない（フィラー/重複/誤字の除去はOK）
 - [i] 番号付きの形式のまま、入力と同じ行数で出力する。説明や注釈は不要
 
 テキスト：
@@ -406,8 +413,11 @@ def correct_segments(segments):
         corrected.append({"start": seg["start"], "end": seg["end"], "text": text})
     return corrected
 
-CUE_MAX_CHARS = 24   # 1キューの最大文字数
-CUE_MAX_DUR = 5.0    # 1キューの最大表示秒数
+CUE_MAX_CHARS = 16   # ソフト上限：この辺で"自然な区切り"が来たら切る（短め＝綺麗で読みやすい）
+CUE_HARD_CHARS = 30  # ハード上限：これを超えたら強制的に切る（暴走防止）
+CUE_MAX_DUR = 4.5    # 1キューの最大表示秒数
+# この文字の直後なら切ってよい（助詞・終助詞・句読点）。単語の途中で切らないための判定に使う
+_NATURAL_BREAK = set("、。！？はがをにへとでもやのねよさわなぞね") | set("。")
 
 def build_word_cues(words, scenes):
     """原音声の単語タイムスタンプを編集後タイムラインへマッピングして字幕を作る（v3方式：テキスト品質が高い）。
@@ -438,8 +448,12 @@ def build_word_cues(words, scenes):
                 c_start = ws
             cur += token
             c_end = max(getattr(w, "end", ws), c_start)
-            if (token.rstrip().endswith(("。", "、", "．", "！", "？", "!", "?"))
-                    or len(cur) >= CUE_MAX_CHARS or (c_end - c_start) >= CUE_MAX_DUR):
+            last = cur.rstrip("　 ")[-1:]
+            end_punct = token.rstrip().endswith(("。", "、", "．", "！", "？", "!", "?"))
+            # 文末で切る／表示が長すぎる／ハード上限超え／ソフト上限を超えていて"自然な区切り"に来た
+            if (end_punct or (c_end - c_start) >= CUE_MAX_DUR
+                    or len(cur) >= CUE_HARD_CHARS
+                    or (len(cur) >= CUE_MAX_CHARS and last in _NATURAL_BREAK)):
                 emit()
         emit()
 
@@ -641,7 +655,9 @@ def _generate_and_build(job_id):
     # タイミングは実測上ほぼズレない（診断で編集後音声の実時刻とほぼ一致を確認）。
     job["progress"] = 80
     cues = build_word_cues(transcript.words, scenes)
-    subtitles = correct_segments(cues)
+    # 動画全体の文字起こしを参考に渡し、崩れた語（数字・一般語）を文脈で直す
+    reference = " ".join(s["text"].strip() for s in cleaned)
+    subtitles = correct_segments(cues, reference=reference)
     for s in subtitles:                       # 余分な文字を除去＋句読点なしに（仕上げ）
         s["text"] = strip_punct(sanitize_caption(s["text"]))
     # 空・単独かな1文字（シーン境界で割れた助詞などの断片）は字幕に出さない
