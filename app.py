@@ -99,124 +99,115 @@ def clean_segments(transcript):
                 merged.append(current.strip())
             if len(merged) > 1:
                 part_duration = duration / len(merged)
+                lp = getattr(segment, "avg_logprob", 0.0)
                 for j, part_text in enumerate(merged):
-                    cleaned.append({"start": segment.start + j * part_duration, "end": segment.start + (j + 1) * part_duration, "text": part_text})
+                    cleaned.append({"start": segment.start + j * part_duration, "end": segment.start + (j + 1) * part_duration, "text": part_text, "avg_logprob": lp})
                 continue
-        cleaned.append({"start": segment.start, "end": segment.end, "text": text})
+        cleaned.append({"start": segment.start, "end": segment.end, "text": text, "avg_logprob": getattr(segment, "avg_logprob", 0.0)})
     return cleaned
 
-# 「もう一度生成」のたびに切り替える編集方針（毎回ちがう“切り口”の編集に見せる）
-EDIT_ANGLES = [
-    "",  # 1本目：標準（バランス重視）
-    "【今回の編集方針】テンポ最優先。1シーンを短め（2〜4秒）にして小気味よく多めに切り替え、勢いを出す。",
-    "【今回の編集方針】ハイライト重視。一番面白い/盛り上がる場面を主役に据え、そこを少し長めに厚く見せる。",
-    "【今回の編集方針】ストーリー重視。話の流れと文脈が丁寧に伝わるよう、つながりを大切に組む。",
-    "【今回の編集方針】別の切り口。前回までと違う場面・トピックを主役にして、新鮮な印象にする。",
+# 編集判断のしきい値（シンプルなルールベース編集）
+GAP_FLAG_SEC = 1.0       # これ以上の無音/間は「間が空いている」サイン → 余白・文脈切れの候補
+UNCLEAR_LOGPROB = -0.6   # これ未満は聞き取りが怪しい（言い間違い・崩れ・不明瞭の可能性）
+
+# 「もう一度生成」時の微調整（編集哲学は変えず、削り具合だけ変えて違いを出す）
+REGEN_NOTES = [
+    "",  # 1本目：標準
+    "前回より思い切って削る：間延び・冗長・つながりの弱い所をさらにカットし、もっとテンポを上げる。",
+    "前回より少し残す：文脈が分かることを優先し、つながりに必要な所は無理に削らない。",
+    "取捨選択を前回と変える：残すか迷う境界のセグメントの採否を前回と入れ替え、別パターンに見せる（哲学は同じ）。",
 ]
 
-def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
-    segments_with_time = ""
-    for seg in cleaned_segments:
-        segments_with_time += f"[{seg['start']:.1f}秒〜{seg['end']:.1f}秒] {seg['text']}\n"
+def _annotate_segments(cleaned_segments):
+    """各セグメントに「前との間(gap)」「聞き取りの怪しさ」を注記し、編集判断の材料にする。"""
+    lines = []
+    for i, s in enumerate(cleaned_segments):
+        flags = []
+        if i > 0:
+            gap = s["start"] - cleaned_segments[i - 1]["end"]
+            if gap >= GAP_FLAG_SEC:
+                flags.append(f"前と{gap:.1f}秒の間")
+        if s.get("avg_logprob", 0.0) <= UNCLEAR_LOGPROB:
+            flags.append("聞き取りが怪しい")
+        note = f"（{' / '.join(flags)}）" if flags else ""
+        lines.append(f"[{s['start']:.1f}秒〜{s['end']:.1f}秒]{note} {s['text']}")
+    return "\n".join(lines)
 
-    # 作り直し（もう一度生成）のとき：過去案を渡し、はっきり違う・より良い案を作らせる
+JSON_SPEC = '{"bgm_mood": "動画に合うBGMのムード", "scenes": [{"start": 開始秒, "end": 終了秒, "reason": "残した/つないだ理由", "transition": "cut または fade"}]}'
+
+def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
+    """内容と文脈を理解し、無駄（余白・聞き取りの崩れ・文脈切れ）を削ってテンポよくまとめる。
+    派手に並べ替えず、元の流れを活かして"いらない所を削る"のが基本方針。"""
+    annotated = _annotate_segments(cleaned_segments)
+
     redo_block = ""
-    if prev_choices:
-        past = "\n".join(
-            "案{}: {}".format(k, "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in ch) or "（なし）")
-            for k, ch in enumerate(prev_choices, 1))
-        redo_block = f"""
-【作り直し中】ユーザーは前の案に満足せず「もう一度生成」を押しました。下の過去案とは“はっきり違う”構成にしてください。
-- ❌禁止：「冒頭のシーンを削るだけ」「末尾を削るだけ」など前回の一部を削っただけの小さな違い
-- ✅必須：動画“全体”から場面を選び直す。前回入れた場面の一部を外し、前回入れていない別の場面を入れる
-- 選ぶ場面・順序の重み・テンポ・長さを変えて、見た目に“別の編集”だと分かるようにする
-- ただし「重要な見どころ・結末は残す／話が完結する」基本は守る
-過去に作った案（これらと明確に変える）:
-{past}
+    if prev_choices and note:
+        past = "案{}: {}".format(len(prev_choices),
+                                 "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in prev_choices[-1]) or "（なし）")
+        redo_block = f"\n【もう一度生成】編集の哲学は同じまま、{note}\n前回の構成: {past}\n"
+
+    propose_prompt = f"""あなたはプロのショート動画編集者です。
+以下は{duration:.1f}秒の動画の文字起こしです。各行が1セグメントで、[開始秒〜終了秒]と、必要なら（注記）が付いています。
+
+{annotated}
+
+内容と文脈を理解した上で、無駄を削ってテンポよくまとめた縦型ショートにしてください。
+派手に並べ替えるのではなく、"元の流れを活かして不要な所を削る"のが基本方針です。
+{redo_block}
+【編集ルール】（シンプルに、確実に守る）
+1. 基本は最初から時系列順につなぐ（場面を勝手に入れ替えない）。ただし冒頭が「えーと/あの」等のフィラー・ただの前置き・自己紹介・無言なら、そこは飛ばして本題から始める
+2. 「間（余白・無音）」は削る。"○秒の間"の注記が付いたセグメントは話が途切れているサイン → 原則カット。残す場合も前後と別シーンに分けて間を映像から消す
+3. 文脈がつながらないセグメントはカット（前後と話がつながらない・脈絡なく飛ぶ・唐突な所）
+4. "聞き取りが怪しい"注記のセグメントは、言い間違い・単語の崩れ・不明瞭の可能性が高い → 原則カット
+5. 言い直し・冗長な繰り返し・どうでもいい雑談・言いよどみはカット
+6. 残すセグメントは"文章として完結"していること（文の途中・言い切る前で切らない）。前後が意味としてつながるように選ぶ
+→ 結果として「最初からテンポよく・余白がなく・話の筋が通った」動画にする
+
+【シーンの作り方（絶対ルール）】
+- 各シーンの start / end は、上の[開始秒〜終了秒]の値とそのまま一致させる（途中の秒で切らない）
+- 連続していて(間が無く)話がつながるセグメントだけを1シーンにまとめてよい。"○秒の間"がある所はシーンを分ける（その間を映像からカットするため）
+- シーンは時系列順（startの昇順）、重複なし、start/endは0以上{duration:.1f}以下
+- 全体の長さは30〜60秒目安（無駄なく筋が通る範囲で。短くしすぎない）
+
+bgm_mood は動画全体に合うムードを1つ。transition は基本"cut"、話題が大きく変わる所だけ"fade"。
+
+以下のJSON形式のみで答えてください（他の文章は不要）。
+{JSON_SPEC}
 """
 
-    angle_block = f"\n{angle}\n" if angle else ""
-
-    propose_prompt = f"""
-あなたはTikTok・Instagram・YouTubeショートのプロ編集者です。
-以下は{duration:.1f}秒の動画の音声テキストです。各行が1セグメントで、[開始秒〜終了秒]が付いています。
-
-{segments_with_time}
-
-この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画を構成してください。
-目的は「長い動画を、テンポよくカットして“ちゃんと完結した”ショート動画にする」こと。
-{redo_block}{angle_block}
-
-【最も大切なこと】
-- 話の流れが最初から最後まで通っていること。起→展開→締めがあり、**途中でぶつ切りに終わらせない**
-- **重要な場面・面白い場面・結末（オチ/まとめ）は必ず残す**。長さを気にして大事な部分を削らない
-- 不要な部分（言い間違い、長い沈黙、冗長な繰り返し、どうでもいい雑談）は積極的に省いてテンポを上げる
-
-【シーン選定の絶対ルール】（必ず守る）
-- 各シーンの start / end は、上記セグメントの [開始秒〜終了秒] の値とそのまま一致させる。セグメントの途中の秒数で切らない
-- セグメント1つ、または連続する複数セグメントをまとめて1シーンにする（区切りはセグメント境界のみ）
-- 文章・話が完結しているシーンだけを選ぶ（言い切りの途中・文の途中で終わるシーンは選ばない）
-- 前後のシーンが話の流れとして自然につながるように選ぶ（脈絡なく飛ばさない）
-- 「えーと」「あの」「えー」などのフィラーで始まるセグメントはシーンの先頭にしない
-
-編集の鉄則：
-- 冒頭3秒で視聴者を引き込む（最もインパクトのある場面から始める）
-- テンポを保つ（だらだらさせない）。1シーンは目安2〜6秒、強調したい所だけ長めにして緩急をつける
-- シーンは時系列順に並べ、重複させない
-- **最後は必ず話の締めくくり（まとめ・結論・オチ）で終わる**
-- 全体の長さは30〜60秒を目安にする。ただし長さのために重要な場面や結末を削らない（完結を最優先し、必要なら短く/長くしてよい）
-
-演出の指示：
-- 動画全体に合うBGMのムード（bgm_mood）を1つ提案する（例：明るい / 感動的 / 緊張感 / おしゃれ / コミカル / 落ち着いた）
-- 各シーンの切り替え方（transition）を指定する。場面や感情が大きく変わる箇所は "fade"、テンポよく繋ぐ箇所は "cut"
-
-シーンの開始・終了秒数は必ず0以上{duration:.1f}以下にしてください。
-
-以下のJSON形式のみで答えてください。
-{{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
-"""
-
-    # 1回目：構成案を作る。作り直し時は温度を上げて前回より大きく変化させる
     msg1 = anthropic_client.messages.create(
         model="claude-sonnet-4-6", max_tokens=1500,
-        temperature=0.9 if prev_choices else 0.7,
+        temperature=0.7 if prev_choices else 0.4,
         messages=[{"role": "user", "content": propose_prompt}])
     proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
 
-    # 毎回 自己レビューで磨く（ストーリー品質を最優先）。
-    # 方針(angle)は尊重して磨くので、再生成でも多少の違いは残る。
+    # 自己レビュー：編集ルールに違反していないか点検して直す（精度を底上げ）
     try:
         msg2 = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1500, temperature=0.3,
-            messages=[{"role": "user", "content": f"""
-あなたはプロのショート動画編集者です。以下は動画の音声テキストと、それに対するショート動画の構成案です。
+            model="claude-sonnet-4-6", max_tokens=1500, temperature=0.2,
+            messages=[{"role": "user", "content": f"""あなたは厳しい編集ディレクターです。以下は文字起こし（注記つき）と、それに対するショート構成案です。
 
-# 音声テキスト（[開始秒〜終了秒]）
-{segments_with_time}
+# 文字起こし（[開始秒〜終了秒]（注記））
+{annotated}
 
 # 構成案（JSON）
 {proposal}
 
-この構成案を厳しくレビューし、より良いショート動画になるよう改善した「最終構成」を出してください。
-特に次を確認し、必要なら直す：
-- 冒頭3秒が最も惹きつける場面になっているか（弱ければ強い場面に差し替える）
-- 退屈な部分・冗長な繰り返し・どうでもいい雑談が混ざっていないか（あれば外す）
-- 一番の見どころ・面白い場面・結末（オチ/まとめ）が入っているか（抜けていれば足す）
-- 話が最初から最後まで自然につながり、途中でぶつ切りに終わっていないか
-- テンポが良いか（だらだらしていないか）
+下の編集ルールに照らして構成案を点検し、違反を直した「最終構成」を出してください。
+- 時系列順か（不要な並べ替えをしていないか）
+- "○秒の間"の所が残っていないか（残っていれば外す／シーンを分けて間を消す）
+- "聞き取りが怪しい"所が残っていないか（残っていれば外す）
+- 文脈がつながらない・唐突なセグメントが混じっていないか（外す）
+- 文の途中で切れているシーンが無いか（完結させる）
+- 最初からテンポよく、余白なくつながっているか
 
-厳守ルール：
-- start/end は必ず上記セグメントの[開始秒〜終了秒]の値と一致させる（途中で切らない）
-- start/end は0以上{duration:.1f}以下
-- シーンは時系列順（startの昇順）に並べる。重複させない
-- 構成案の「方針・場面の選び方」は尊重し、その方向で磨く（別の構成に作り替えない）
-- 改善が不要と判断したら構成案のままでよい
+厳守：start/endは上記の値と一致／時系列順／重複なし／0〜{duration:.1f}秒。改善不要ならそのままでよい。
 
 以下のJSON形式のみで答えてください（他の文章は不要）。
-{{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
+{JSON_SPEC}
 """}])
         refined = msg2.content[0].text.replace("```json", "").replace("```", "").strip()
-        if json.loads(refined).get("scenes"):   # 妥当な改善版ならそれを採用
+        if json.loads(refined).get("scenes"):
             return refined
     except Exception:
         pass
@@ -620,9 +611,9 @@ def _generate_and_build(job_id):
     final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
 
     job.update(status="生成中", progress=55)
-    prev_choices = job.get("prev_choices", [])   # 過去に作った構成（作り直し時に「違う案」を出すため）
-    angle = EDIT_ANGLES[len(prev_choices) % len(EDIT_ANGLES)]   # 生成のたびに編集方針を変える
-    structure = generate_structure(cleaned, duration, prev_choices=prev_choices, angle=angle)
+    prev_choices = job.get("prev_choices", [])   # 過去に作った構成（作り直し時に削り具合を変える）
+    note = REGEN_NOTES[len(prev_choices) % len(REGEN_NOTES)]   # 再生成のたびに削り具合だけ変える
+    structure = generate_structure(cleaned, duration, prev_choices=prev_choices, note=note)
     scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
     # 今回採用した構成を記録（次の作り直しで重複を避ける）
     job.setdefault("prev_choices", []).append([(round(s["start"], 1), round(s["end"], 1)) for s in scenes])
