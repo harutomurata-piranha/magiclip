@@ -105,10 +105,27 @@ def clean_segments(transcript):
         cleaned.append({"start": segment.start, "end": segment.end, "text": text})
     return cleaned
 
-def generate_structure(cleaned_segments, duration):
+def generate_structure(cleaned_segments, duration, prev_choices=None):
     segments_with_time = ""
     for seg in cleaned_segments:
         segments_with_time += f"[{seg['start']:.1f}秒〜{seg['end']:.1f}秒] {seg['text']}\n"
+
+    # 作り直し（もう一度生成）のとき：過去案を渡し、はっきり違う・より良い案を作らせる
+    redo_block = ""
+    if prev_choices:
+        past = "\n".join(
+            "案{}: {}".format(k, "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in ch) or "（なし）")
+            for k, ch in enumerate(prev_choices, 1))
+        redo_block = f"""
+【作り直し中】ユーザーは前の案に満足せず「もう一度生成」を押しました。
+下記の過去案とは“はっきり違う”、そして前より良い構成にしてください。
+- 同じシーンの組み合わせを繰り返さない
+- 選ぶ場面・切り口・テンポ・長さを変えて新鮮にする（前回入れた場面を別の場面に置き換える等）
+- ただし「重要な見どころ・結末は残す／話が完結する」基本は守る
+過去に作った案（避ける）:
+{past}
+"""
+
     propose_prompt = f"""
 あなたはTikTok・Instagram・YouTubeショートのプロ編集者です。
 以下は{duration:.1f}秒の動画の音声テキストです。各行が1セグメントで、[開始秒〜終了秒]が付いています。
@@ -117,6 +134,7 @@ def generate_structure(cleaned_segments, duration):
 
 この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画を構成してください。
 目的は「長い動画を、テンポよくカットして“ちゃんと完結した”ショート動画にする」こと。
+{redo_block}
 
 【最も大切なこと】
 - 話の流れが最初から最後まで通っていること。起→展開→締めがあり、**途中でぶつ切りに終わらせない**
@@ -147,9 +165,10 @@ def generate_structure(cleaned_segments, duration):
 {{"bgm_mood": "動画全体に合うBGMのムード", "scenes": [{{"start": 開始秒数, "end": 終了秒数, "reason": "理由", "transition": "fade または cut"}}]}}
 """
 
-    # 1回目：構成案を作る（temperatureは控えめ＝最良の選択に寄せつつ、再生成で多少の変化も残す）
+    # 1回目：構成案を作る。作り直し時は温度を上げて前回より大きく変化させる
     msg1 = anthropic_client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1500, temperature=0.7,
+        model="claude-sonnet-4-6", max_tokens=1500,
+        temperature=0.9 if prev_choices else 0.7,
         messages=[{"role": "user", "content": propose_prompt}])
     proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
 
@@ -582,8 +601,11 @@ def _generate_and_build(job_id):
     final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
 
     job.update(status="生成中", progress=55)
-    structure = generate_structure(cleaned, duration)
+    prev_choices = job.get("prev_choices", [])   # 過去に作った構成（作り直し時に「違う案」を出すため）
+    structure = generate_structure(cleaned, duration, prev_choices=prev_choices)
     scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
+    # 今回採用した構成を記録（次の作り直しで重複を避ける）
+    job.setdefault("prev_choices", []).append([(round(s["start"], 1), round(s["end"], 1)) for s in scenes])
     edit_video(video_path, scenes, output_path)
 
     job["progress"] = 80
