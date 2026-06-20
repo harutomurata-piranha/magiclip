@@ -183,12 +183,8 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
         messages=[{"role": "user", "content": propose_prompt}])
     proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
 
-    # 作り直し（再生成）時は自己レビューを省く。レビューは「最良の1つ」に収束しがちで、
-    # 毎回似た構成になってしまうため。1本目だけ品質重視でレビューし、2本目以降は方針で多様性を出す。
-    if prev_choices:
-        return proposal
-
-    # 1本目：自分の構成案を厳しくレビューして改善（propose → critique → refine）
+    # 毎回 自己レビューで磨く（ストーリー品質を最優先）。
+    # 方針(angle)は尊重して磨くので、再生成でも多少の違いは残る。
     try:
         msg2 = anthropic_client.messages.create(
             model="claude-sonnet-4-6", max_tokens=1500, temperature=0.3,
