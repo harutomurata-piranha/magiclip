@@ -2,47 +2,59 @@
 {% block title %}テキスト編集 - MagiClip{% endblock %}
 {% block content %}
 <h1>テキストで編集 ✨</h1>
-<p class="muted">字幕を直すだけ。<b>不要な行を消すと、その映像も自動でカット</b>されます。台本を編集する感覚でどうぞ。</p>
+<p class="muted">動画の<b>全文</b>です。<b>✅を付けた場面が動画に入ります</b>（✅＝AIのおすすめ）。
+AIが外した場面も自由に<b>追加</b>でき、不要な場面は<b>外す</b>と映像ごとカットされます。文字の修正もできます。</p>
 
 <div style="display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start">
   <div>
-    <video src="{{ url_for('video', job_id=job.id) }}?v={{ data.subtitles|length }}" controls muted playsinline></video>
+    <video src="{{ url_for('video', job_id=job.id) }}?v={{ segments|length }}" controls muted playsinline></video>
     <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
+    <div class="center" style="margin-top:8px">
+      <button type="button" class="btn btn-sm btn-ghost" id="onlyAI">AIのおすすめだけに戻す</button>
+    </div>
   </div>
 
   <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
     <div id="lines">
-      {% for s in data.subtitles %}
-      <div class="line" data-i="{{ loop.index0 }}"
-           style="display:flex;gap:10px;align-items:center;margin:8px 0">
-        <input type="checkbox" name="keep_{{ loop.index0 }}" checked hidden>
-        <button type="button" class="del" title="この行と映像を削除"
-                style="border:1px solid var(--line);background:var(--panel2);color:var(--muted);
-                       border-radius:8px;width:34px;height:38px;cursor:pointer;flex:none">🗑</button>
+      {% for s in segments %}
+      <label class="line {{ 'on' if s.selected else 'off' }}" data-i="{{ loop.index0 }}"
+             style="display:flex;gap:10px;align-items:center;margin:7px 0;cursor:pointer">
+        <input type="checkbox" name="keep_{{ loop.index0 }}" {% if s.selected %}checked{% endif %}
+               class="cb" style="width:auto;flex:none">
         <span class="muted" style="font-size:12px;min-width:42px">{{ '%.1f'|format(s.start) }}s</span>
-        <input type="text" name="text_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1">
-      </div>
+        <input type="text" name="text_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1"
+               onclick="event.stopPropagation()">
+        {% if s.selected %}<span class="tag" style="color:#b9a9ff;flex:none">AI</span>{% endif %}
+      </label>
       {% endfor %}
     </div>
     <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
-    <p class="muted" style="font-size:12px;margin-top:8px">※ 文章の途中で切らず、字幕（発話のかたまり）単位で編集します。</p>
+    <p class="muted" style="font-size:12px;margin-top:8px">※ 場面（発話のかたまり）単位で選びます。隣り合う場面は自然につながり、離れた場面はカットされます。</p>
   </form>
 </div>
 {% endblock %}
 {% block scripts %}
+<style>
+  .line.off{opacity:.5}
+  .line input[type=text]{transition:opacity .15s}
+</style>
 <script>
-  // 🗑 で行を「削除」状態に（チェックを外し、見た目を薄く）。もう一度押すと戻る。
+  function paint(line){
+    const on = line.querySelector('.cb').checked;
+    line.classList.toggle('off', !on);
+    line.classList.toggle('on', on);
+  }
   document.querySelectorAll('.line').forEach(line => {
-    const cb = line.querySelector('input[type=checkbox]');
-    const txt = line.querySelector('input[type=text]');
-    const btn = line.querySelector('.del');
-    btn.onclick = () => {
-      cb.checked = !cb.checked;
-      const removed = !cb.checked;
-      line.style.opacity = removed ? .4 : 1;
-      txt.style.textDecoration = removed ? 'line-through' : 'none';
-      btn.textContent = removed ? '↩' : '🗑';
-    };
+    const cb = line.querySelector('.cb');
+    cb.addEventListener('change', () => paint(line));
   });
+  // 「AIのおすすめだけに戻す」: AIタグのある行だけON
+  document.getElementById('onlyAI').onclick = () => {
+    document.querySelectorAll('.line').forEach(line => {
+      const isAI = !!line.querySelector('.tag');
+      line.querySelector('.cb').checked = isAI;
+      paint(line);
+    });
+  };
 </script>
 {% endblock %}

@@ -84,6 +84,34 @@ def load_edit_data(output_path):
         return json.load(f)
 
 
+def clean_caption(t):
+    """字幕として表示する形に整える（句読点なし・余分記号なし）。"""
+    return E.strip_punct(E.sanitize_caption(t or ""))
+
+
+def list_segments(output_path):
+    """プロ編集画面用：動画の“全文”（全セグメント）を返す。
+    AIが採用した区間には selected=True を付ける（=おすすめに✅）。
+    ユーザーはここから、AIが選ばなかった部分も含めて自由に取捨選択できる。
+    """
+    data = load_edit_data(output_path)
+    if not data:
+        return []
+    ai = [(sc["start"], sc["end"]) for sc in data.get("scenes", [])]
+
+    def in_ai(s, e):
+        return any(s < ae and e > a_s for a_s, ae in ai)
+
+    segs = []
+    for seg in data.get("cleaned", []):
+        segs.append({
+            "start": seg["start"], "end": seg["end"],
+            "text": clean_caption(seg["text"]),
+            "selected": in_ai(seg["start"], seg["end"]),
+        })
+    return segs
+
+
 # ---------------- 公開API ----------------
 def process_video(input_path, output_path, plan="free"):
     """全自動編集（一般プラン）。完成動画を output_path に書き出す。
@@ -157,16 +185,20 @@ def reedit_textbased(output_path, kept_lines):
     cut_path = stem + "_cut.mp4"
     E.edit_video(data["input_path"], scenes, cut_path)   # ここで out_start/out_end が付く
 
-    # 残した字幕を新タイムラインに再配置（ユーザーが直したテキストを保持）
+    # 残した区間を新タイムラインに再配置して字幕にする（ユーザーが直したテキストを保持・整形）。
+    # テキストが空の区間は「映像は入れるが字幕は出さない」。
     subs = []
     for it in items:
+        txt = clean_caption(it.get("text", ""))
+        if not txt:
+            continue
         s, e = float(it["orig_start"]), float(it["orig_end"])
         sc = _find_scene(scenes, s)
         if not sc:
             continue
         ns = max(sc["out_start"], min(s - sc["start"] + sc["out_start"], sc["out_end"]))
         ne = max(ns, min(e - sc["start"] + sc["out_start"], sc["out_end"]))
-        subs.append({"start": ns, "end": ne, "text": it["text"],
+        subs.append({"start": ns, "end": ne, "text": txt,
                      "orig_start": s, "orig_end": e})
     subs.sort(key=lambda x: x["start"])
 

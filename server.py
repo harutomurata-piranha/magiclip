@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
-from video_processor import process_video, reedit_textbased, load_edit_data
+from video_processor import process_video, reedit_textbased, load_edit_data, list_segments
 
 
 def create_app():
@@ -308,24 +308,21 @@ def create_app():
     @login_required
     def edit(job_id):
         job = _owned_job(job_id)
-        data = load_edit_data(job.output_path) if job.output_path else None
-        if not data:
+        segments = list_segments(job.output_path) if job.output_path else []
+        if not segments:
             flash("この動画には編集データがありません。", "error")
             return redirect(url_for("result", job_id=job_id))
 
         if request.method == "POST":
-            # テキストベース編集：残した字幕（チェックON＆テキストあり）だけを集める。
-            # 字幕を消す＝その区間の映像も消える。
+            # テキストベース編集：チェックした区間（AIが選ばなかった所も含む）だけを集める。
+            # 選んだ区間の映像だけが残る＝字幕の取捨選択がそのままカットになる。
             kept = []
-            for i, s in enumerate(data["subtitles"]):
+            for i, seg in enumerate(segments):
                 if request.form.get(f"keep_{i}"):
-                    txt = (request.form.get(f"text_{i}") or "").strip()
-                    if txt:
-                        kept.append({"text": txt,
-                                     "orig_start": s.get("orig_start"),
-                                     "orig_end": s.get("orig_end")})
+                    kept.append({"text": request.form.get(f"text_{i}", ""),
+                                 "orig_start": seg["start"], "orig_end": seg["end"]})
             if not kept:
-                flash("少なくとも1つの字幕を残してください。", "error")
+                flash("少なくとも1つの場面を選んでください。", "error")
                 return redirect(url_for("edit", job_id=job_id))
             job.status = "処理中"
             db.session.commit()
@@ -333,7 +330,7 @@ def create_app():
                              daemon=True).start()
             return redirect(url_for("processing", job_id=job_id))
 
-        return render_template("edit.html", job=job, data=data)
+        return render_template("edit.html", job=job, segments=segments)
 
     def _run_reedit(flask_app, job_id, output_path, kept_lines):
         with flask_app.app_context():
