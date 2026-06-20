@@ -105,7 +105,16 @@ def clean_segments(transcript):
         cleaned.append({"start": segment.start, "end": segment.end, "text": text})
     return cleaned
 
-def generate_structure(cleaned_segments, duration, prev_choices=None):
+# 「もう一度生成」のたびに切り替える編集方針（毎回ちがう“切り口”の編集に見せる）
+EDIT_ANGLES = [
+    "",  # 1本目：標準（バランス重視）
+    "【今回の編集方針】テンポ最優先。1シーンを短め（2〜4秒）にして小気味よく多めに切り替え、勢いを出す。",
+    "【今回の編集方針】ハイライト重視。一番面白い/盛り上がる場面を主役に据え、そこを少し長めに厚く見せる。",
+    "【今回の編集方針】ストーリー重視。話の流れと文脈が丁寧に伝わるよう、つながりを大切に組む。",
+    "【今回の編集方針】別の切り口。前回までと違う場面・トピックを主役にして、新鮮な印象にする。",
+]
+
+def generate_structure(cleaned_segments, duration, prev_choices=None, angle=""):
     segments_with_time = ""
     for seg in cleaned_segments:
         segments_with_time += f"[{seg['start']:.1f}秒〜{seg['end']:.1f}秒] {seg['text']}\n"
@@ -117,14 +126,16 @@ def generate_structure(cleaned_segments, duration, prev_choices=None):
             "案{}: {}".format(k, "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in ch) or "（なし）")
             for k, ch in enumerate(prev_choices, 1))
         redo_block = f"""
-【作り直し中】ユーザーは前の案に満足せず「もう一度生成」を押しました。
-下記の過去案とは“はっきり違う”、そして前より良い構成にしてください。
-- 同じシーンの組み合わせを繰り返さない
-- 選ぶ場面・切り口・テンポ・長さを変えて新鮮にする（前回入れた場面を別の場面に置き換える等）
+【作り直し中】ユーザーは前の案に満足せず「もう一度生成」を押しました。下の過去案とは“はっきり違う”構成にしてください。
+- ❌禁止：「冒頭のシーンを削るだけ」「末尾を削るだけ」など前回の一部を削っただけの小さな違い
+- ✅必須：動画“全体”から場面を選び直す。前回入れた場面の一部を外し、前回入れていない別の場面を入れる
+- 選ぶ場面・順序の重み・テンポ・長さを変えて、見た目に“別の編集”だと分かるようにする
 - ただし「重要な見どころ・結末は残す／話が完結する」基本は守る
-過去に作った案（避ける）:
+過去に作った案（これらと明確に変える）:
 {past}
 """
+
+    angle_block = f"\n{angle}\n" if angle else ""
 
     propose_prompt = f"""
 あなたはTikTok・Instagram・YouTubeショートのプロ編集者です。
@@ -134,7 +145,7 @@ def generate_structure(cleaned_segments, duration, prev_choices=None):
 
 この動画全体の中から、視聴者が最後まで見たくなる縦型ショート動画を構成してください。
 目的は「長い動画を、テンポよくカットして“ちゃんと完結した”ショート動画にする」こと。
-{redo_block}
+{redo_block}{angle_block}
 
 【最も大切なこと】
 - 話の流れが最初から最後まで通っていること。起→展開→締めがあり、**途中でぶつ切りに終わらせない**
@@ -172,7 +183,12 @@ def generate_structure(cleaned_segments, duration, prev_choices=None):
         messages=[{"role": "user", "content": propose_prompt}])
     proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
 
-    # 2回目：自分の構成案を厳しくレビューして改善（propose → critique → refine）
+    # 作り直し（再生成）時は自己レビューを省く。レビューは「最良の1つ」に収束しがちで、
+    # 毎回似た構成になってしまうため。1本目だけ品質重視でレビューし、2本目以降は方針で多様性を出す。
+    if prev_choices:
+        return proposal
+
+    # 1本目：自分の構成案を厳しくレビューして改善（propose → critique → refine）
     try:
         msg2 = anthropic_client.messages.create(
             model="claude-sonnet-4-6", max_tokens=1500, temperature=0.3,
@@ -197,6 +213,7 @@ def generate_structure(cleaned_segments, duration, prev_choices=None):
 - start/end は必ず上記セグメントの[開始秒〜終了秒]の値と一致させる（途中で切らない）
 - start/end は0以上{duration:.1f}以下
 - シーンは時系列順（startの昇順）に並べる。重複させない
+- 構成案の「方針・場面の選び方」は尊重し、その方向で磨く（別の構成に作り替えない）
 - 改善が不要と判断したら構成案のままでよい
 
 以下のJSON形式のみで答えてください（他の文章は不要）。
@@ -602,7 +619,8 @@ def _generate_and_build(job_id):
 
     job.update(status="生成中", progress=55)
     prev_choices = job.get("prev_choices", [])   # 過去に作った構成（作り直し時に「違う案」を出すため）
-    structure = generate_structure(cleaned, duration, prev_choices=prev_choices)
+    angle = EDIT_ANGLES[len(prev_choices) % len(EDIT_ANGLES)]   # 生成のたびに編集方針を変える
+    structure = generate_structure(cleaned, duration, prev_choices=prev_choices, angle=angle)
     scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
     # 今回採用した構成を記録（次の作り直しで重複を避ける）
     job.setdefault("prev_choices", []).append([(round(s["start"], 1), round(s["end"], 1)) for s in scenes])
