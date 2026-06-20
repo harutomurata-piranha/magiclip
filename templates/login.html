@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}ログイン - MagiClip{% endblock %}
+{% block content %}
+<div class="formcard">
+  <h2>ログイン</h2>
+  <p class="sub">おかえりなさい。</p>
+  <form method="post">
+    <label>メールアドレス</label>
+    <input type="email" name="email" required autofocus>
+    <label>パスワード</label>
+    <input type="password" name="password" required>
+    <button class="btn" type="submit">ログイン</button>
+  </form>
+  <div class="altlink">はじめての方は <a href="{{ url_for('register') }}">新規登録</a></div>
+</div>
+{% endblock %}

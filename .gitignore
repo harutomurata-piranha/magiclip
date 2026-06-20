@@ -1,7 +1,12 @@
 .env
+.env.production
 .DS_Store
 __pycache__/
 *.pyc
+
+# DB（ローカル）
+*.db
+instance/
 
 # 作業フォルダ・生成物
 uploads/
@@ -16,3 +21,5 @@ server.log
 *.mp4
 *.mp3
 *.srt
+business.log
+magiclip*.db

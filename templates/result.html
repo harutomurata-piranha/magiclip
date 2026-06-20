@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}完成 - MagiClip{% endblock %}
+{% block content %}
+<div class="panelbox">
+  <h1>完成しました 🎉</h1>
+  <p class="muted">プレビューを確認して、ダウンロードしてください。</p>
+  <video src="{{ url_for('video', job_id=job.id) }}" controls autoplay muted playsinline></video>
+  <div class="center" style="margin-top:14px">
+    <a class="btn" href="{{ url_for('download', job_id=job.id) }}">⬇️ ダウンロード</a>
+    <a class="btn btn-ghost" href="{{ url_for('upload') }}">もう1本作る</a>
+  </div>
+</div>
+<p class="center"><a class="muted" href="{{ url_for('mypage') }}">← マイページに戻る</a></p>
+{% endblock %}

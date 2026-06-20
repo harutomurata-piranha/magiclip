@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}料金プラン - MagiClip{% endblock %}
+{% block content %}
+<div class="center">
+  <h1>シンプルな料金</h1>
+  <p class="muted">まずは無料で。必要になったら従量課金か月額で。</p>
+</div>
+
+<div class="plangrid">
+  <div class="plan">
+    <h3>お試し無料</h3>
+    <div class="price">¥0</div>
+    <ul>
+      <li>{{ cfg.FREE_TRIAL_CREDITS }}本まで無料</li>
+      <li>全機能おためし</li>
+      <li>クレカ登録不要</li>
+    </ul>
+    {% if current_user.is_authenticated %}
+      <a class="btn btn-ghost" href="{{ url_for('upload') }}">作成する</a>
+    {% else %}
+      <a class="btn" href="{{ url_for('register') }}">無料で始める</a>
+    {% endif %}
+  </div>
+
+  <div class="plan feat">
+    <h3>従量課金</h3>
+    <div class="price">¥{{ cfg.PRICE_PAYG_JPY }}<small> / 1本</small></div>
+    <ul>
+      <li>使った分だけ支払い</li>
+      <li>1本ずつ購入</li>
+      <li>有効期限なし</li>
+    </ul>
+    {% if current_user.is_authenticated %}
+      <form method="post" action="{{ url_for('checkout', kind='payg') }}">
+        <button class="btn" type="submit">1本購入する</button>
+      </form>
+    {% else %}
+      <a class="btn" href="{{ url_for('register') }}">登録して購入</a>
+    {% endif %}
+  </div>
+
+  <div class="plan">
+    <h3>月額プラン</h3>
+    <div class="price">¥{{ cfg.PRICE_MONTHLY_JPY }}<small> / 月</small></div>
+    <ul>
+      <li>作り放題</li>
+      <li>本数制限なし</li>
+      <li>いつでも解約OK</li>
+    </ul>
+    {% if current_user.is_authenticated %}
+      <form method="post" action="{{ url_for('checkout', kind='monthly') }}">
+        <button class="btn btn-ghost" type="submit">月額に登録</button>
+      </form>
+    {% else %}
+      <a class="btn btn-ghost" href="{{ url_for('register') }}">登録して開始</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if not cfg.stripe_enabled %}
+<p class="center muted" style="margin-top:24px">※開発モード：Stripe未設定のため、購入ボタンは決済をシミュレートします。</p>
+{% endif %}
+{% endblock %}

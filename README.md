@@ -6,6 +6,35 @@
 
 ---
 
+## 🧱 アプリ構成（ビジネスの「箱」＋差し替え可能なAIエンジン）
+
+ビジネス機能（登録・課金・マイページ等）と、AI編集エンジンを **分離** しています。
+
+| 役割 | ファイル | 説明 |
+|---|---|---|
+| ビジネス本体（箱） | `server.py` | LP / 登録・ログイン / プラン / Stripe決済 / マイページ / アップロード / 処理中 / 完成 |
+| 設定 | `config.py` | `.env.development` / `.env.production` を APP_ENV で切替 |
+| データ | `models.py` | User / Job / Payment（SQLite） |
+| **AI編集エンジン** | **`video_processor.py`** | **`process_video(input_path, output_path, plan)` の1関数。今はダミー。後で本物に差し替え** |
+
+### 起動（開発）
+```bash
+pip install -r requirements.txt
+python server.py            # http://127.0.0.1:5000  （APP_ENV未指定=development）
+```
+- 開発環境：本数制限なし・Stripeはテスト（キー未設定なら購入は「シミュレート」）。
+
+### 本番
+```bash
+export APP_ENV=production   # .env.production を読む（Stripe本番・本数制限あり）
+gunicorn server:app
+```
+
+### AIエンジンの差し替え方
+`video_processor.py` の `process_video()` の中身を、本物のAI編集（現在の `app.py` のロジック）に置き換えるだけ。箱側（`server.py`）の変更は不要。
+
+---
+
 ## ✨ 主な機能
 
 - 📤 動画をアップロードするだけで全自動編集（縦型ショート 1080×1920）

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}マイページ - MagiClip{% endblock %}
+{% block content %}
+<h1>マイページ</h1>
+<p class="muted">{{ current_user.email }}</p>
+
+<div class="statrow">
+  <div class="stat">
+    <div class="big">{{ current_user.plan_label }}</div>
+    <div class="lbl">現在のプラン</div>
+  </div>
+  <div class="stat">
+    <div class="big">
+      {% if cfg.NO_LIMIT %}∞{% elif current_user.subscription_active %}無制限{% else %}{{ current_user.credits }}{% endif %}
+    </div>
+    <div class="lbl">残り本数{% if cfg.NO_LIMIT %}（開発：無制限）{% endif %}</div>
+  </div>
+  <div class="stat">
+    <div class="big">{{ jobs|length }}</div>
+    <div class="lbl">作成した動画</div>
+  </div>
+</div>
+
+<div class="center" style="margin:24px 0">
+  <a class="btn" href="{{ url_for('upload') }}">＋ 新しく作成する</a>
+  <a class="btn btn-ghost" href="{{ url_for('plans') }}">プランを変更</a>
+</div>
+
+<h3>作成履歴</h3>
+{% if jobs %}
+<table>
+  <tr><th>ファイル</th><th>状態</th><th>作成日時</th><th></th></tr>
+  {% for j in jobs %}
+  <tr>
+    <td>{{ j.filename }}</td>
+    <td>
+      {% if j.status == '完成' %}<span class="tag done">完成</span>
+      {% elif j.status == 'エラー' %}<span class="tag err">エラー</span>
+      {% else %}<span class="tag run">{{ j.status }}</span>{% endif %}
+    </td>
+    <td class="muted">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td>
+      {% if j.status == '完成' %}<a href="{{ url_for('result', job_id=j.id) }}">開く</a>
+      {% elif j.status not in ['エラー'] %}<a href="{{ url_for('processing', job_id=j.id) }}">確認</a>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">まだ作成した動画はありません。</p>
+{% endif %}
+{% endblock %}

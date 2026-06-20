@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}動画をアップロード - MagiClip{% endblock %}
+{% block content %}
+<div class="panelbox">
+  <h1>動画をアップロード</h1>
+  <p class="muted">動画を1つ選ぶだけ。あとはAIにおまかせ。</p>
+  <form method="post" enctype="multipart/form-data" id="form">
+    <label class="drop" id="drop">
+      <div id="label">クリックして動画を選択<br><span class="muted">（または ここにドラッグ＆ドロップ）</span></div>
+      <input type="file" name="video" id="file" accept="video/*" hidden required>
+    </label>
+    <button class="btn" type="submit" id="go" disabled>魔法をかける ✨</button>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const file = document.getElementById('file');
+  const drop = document.getElementById('drop');
+  const label = document.getElementById('label');
+  const go = document.getElementById('go');
+  file.onchange = () => {
+    if (file.files.length) { label.textContent = file.files[0].name; go.disabled = false; }
+  };
+  drop.ondragover = e => { e.preventDefault(); drop.style.borderColor = '#7c5cff'; };
+  drop.ondragleave = () => drop.style.borderColor = '';
+  drop.ondrop = e => {
+    e.preventDefault(); drop.style.borderColor = '';
+    if (e.dataTransfer.files.length) { file.files = e.dataTransfer.files; file.onchange(); }
+  };
+  document.getElementById('form').onsubmit = () => { go.disabled = true; go.textContent = 'アップロード中…'; };
+</script>
+{% endblock %}

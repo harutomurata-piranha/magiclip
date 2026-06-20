@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}MagiClip{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="{{ url_for('index') }}">✨ MagiClip</a>
+    <nav>
+      {% if current_user.is_authenticated %}
+        <a href="{{ url_for('upload') }}">作成</a>
+        <a href="{{ url_for('mypage') }}">マイページ</a>
+        <a href="{{ url_for('plans') }}">プラン</a>
+        <a class="muted" href="{{ url_for('logout') }}">ログアウト</a>
+      {% else %}
+        <a href="{{ url_for('plans') }}">プラン</a>
+        <a href="{{ url_for('login') }}">ログイン</a>
+        <a class="btn btn-sm" href="{{ url_for('register') }}">無料で試す</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  {% if cfg.IS_DEV %}<div class="devbar">開発環境（APP_ENV=development）: Stripeテスト / 本数制限なし</div>{% endif %}
+
+  <main class="wrap">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="foot">© MagiClip — アップロードするだけで、ショート動画が完成。</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

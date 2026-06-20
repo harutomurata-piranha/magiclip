@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <span class="badge">アップロードするだけ・編集スキル不要</span>
+  <h1>動画を上げるだけで<br>“バズる”ショートが完成。</h1>
+  <p>長い動画をアップするだけで、AIが見どころを選び、テンポよくカット。字幕も自動で。あなたは待つだけ。</p>
+  <div class="cta">
+    <a class="btn" href="{{ url_for('register') }}">無料で試してみる</a>
+    <a class="btn btn-ghost" href="{{ url_for('plans') }}">料金を見る</a>
+  </div>
+</section>
+
+<section class="steps">
+  <div class="card"><div class="step-n">STEP 1</div><h3>アップロード</h3><p>スマホやPCから動画を1つ選ぶだけ。</p></div>
+  <div class="card"><div class="step-n">STEP 2</div><h3>AIが自動編集</h3><p>見どころ抽出・カット・字幕付けまで全自動。</p></div>
+  <div class="card"><div class="step-n">STEP 3</div><h3>ダウンロード</h3><p>完成した縦型ショートをすぐに保存・投稿。</p></div>
+</section>
+
+<section class="panelbox">
+  <h2>まずは無料で。</h2>
+  <p class="muted">登録すると、お試しで数本まで無料で作成できます。</p>
+  <a class="btn" href="{{ url_for('register') }}">無料で始める</a>
+</section>
+{% endblock %}

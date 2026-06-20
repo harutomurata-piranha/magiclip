@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}新規登録 - MagiClip{% endblock %}
+{% block content %}
+<div class="formcard">
+  <h2>新規登録</h2>
+  <p class="sub">お試しで{{ cfg.FREE_TRIAL_CREDITS }}本まで無料で作成できます。</p>
+  <form method="post">
+    <label>メールアドレス</label>
+    <input type="email" name="email" required autofocus>
+    <label>パスワード</label>
+    <input type="password" name="password" required>
+    <button class="btn" type="submit">無料で始める</button>
+  </form>
+  <div class="altlink">アカウントをお持ちですか？ <a href="{{ url_for('login') }}">ログイン</a></div>
+</div>
+{% endblock %}
