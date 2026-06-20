@@ -501,14 +501,14 @@ def burn_subtitles(input_path, subtitles, output_path):
     for p in png_paths:
         os.remove(p)
 
-def process_phase_scenes(job_id, video_path):
-    """段階1：文字起こし→候補シーンを用意。AIのおすすめ選択を付けて「シーン選択待ち」で停止。"""
+def process_video_auto(job_id, video_path):
+    """全自動：アップロード→文字起こし→AI構成→編集→字幕→BGM→完成（編集画面なし）。"""
     try:
         job = jobs[job_id]
         job.update(status="処理中", progress=10)
         audio_path = f"{OUTPUT_FOLDER}/{job_id}_audio.mp3"
 
-        job["progress"] = 20
+        job["progress"] = 25
         duration = get_video_duration(video_path)
         extract_audio(video_path, audio_path)
 
@@ -516,155 +516,59 @@ def process_phase_scenes(job_id, video_path):
         transcript = transcribe_audio(audio_path)
         cleaned = clean_segments(transcript)
 
-        job["progress"] = 65
-        structure = generate_structure(cleaned, duration)
-        ai_scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
-
-        # 字幕テキストを先に整える（確認画面で編集しやすいように）
-        cleaned = correct_segments(cleaned)
-
-        # 各候補に、その区間内の単語（表記＋タイムスタンプ）を保持（テキスト基準のカット用）
-        words = getattr(transcript, "words", None) or []
-        def seg_words(s):
-            return [{"surface": getattr(w, "word", ""), "start": getattr(w, "start", 0.0), "end": getattr(w, "end", 0.0)}
-                    for w in words if s["start"] - 0.01 <= getattr(w, "start", -1) < s["end"]]
-
-        def in_ai(seg):
-            return any(sc["start"] - 0.05 <= seg["start"] < sc["end"] for sc in ai_scenes)
-        candidates = [{"start": s["start"], "end": s["end"], "text": s["text"],
-                       "selected": in_ai(s), "words": seg_words(s)}
-                      for s in cleaned]
-
-        # 各候補シーンのサムネイル（中間地点のフレーム）を抽出 → 確認画面で表示
-        job["progress"] = 68
-        for i, c in enumerate(candidates):
-            mid = (c["start"] + c["end"]) / 2
-            subprocess.run(["ffmpeg", "-ss", f"{mid:.2f}", "-i", video_path, "-frames:v", "1",
-                            "-vf", "scale=-2:120", "-q:v", "5",
-                            f"{OUTPUT_FOLDER}/{job_id}_thumb_{i}.jpg", "-y"], capture_output=True)
-
-        job["candidates"] = candidates
+        # 再生成で使い回せるよう保持（文字起こしは1回だけ）
+        job["transcript"] = transcript
+        job["cleaned"] = cleaned
         job["video_path"] = video_path
-        job["bgm_mood"] = bgm_mood
-        job.update(status="確認待ち", progress=70)
+        job["duration"] = duration
+
+        _generate_and_build(job_id)
 
     except Exception as e:
         jobs[job_id] = {"status": "エラー", "error": str(e)}
 
-def _char_to_word(original, words):
-    """元テキストの各文字が、どの単語(index)に対応するかを返す（単語の表記と文字単位で対応付け）"""
-    wc, owner = [], []
-    for wi, w in enumerate(words):
-        for ch in w["surface"]:
-            wc.append(ch)
-            owner.append(wi)
-    res = [None] * len(original)
-    sm = difflib.SequenceMatcher(None, list(original), wc, autojunk=False)
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag in ("equal", "replace"):
-            for off in range(min(i2 - i1, j2 - j1)):
-                res[i1 + off] = owner[j1 + off]
-    last = None        # 前方向に補完
-    for k in range(len(res)):
-        if res[k] is None: res[k] = last
-        else: last = res[k]
-    nxt = None         # 後方向に補完
-    for k in range(len(res) - 1, -1, -1):
-        if res[k] is None: res[k] = nxt
-        else: nxt = res[k]
-    return res
+def _generate_and_build(job_id):
+    """AI構成→編集→字幕→BGM→完成。再生成時はキャッシュした文字起こしを再利用し、
+    generate_structure を呼び直すことで毎回ちがう構成（別パターン）になる。"""
+    job = jobs[job_id]
+    cleaned = job["cleaned"]
+    transcript = job["transcript"]
+    video_path = job["video_path"]
+    duration = job["duration"]
+    output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
+    srt_path = f"{OUTPUT_FOLDER}/{job_id}_subtitles.srt"
+    subtitled_path = f"{OUTPUT_FOLDER}/{job_id}_subtitled.mp4"
+    final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
 
-def trimmed_range(seg, edited_text):
-    """元テキスト(seg['text'])と編集後テキストを差分し、『削除された部分』を映像からトリムした
-    [start, end] を返す。書き換え(誤字修正)はカット扱いにしない（=映像維持）。"""
-    D = seg["text"]
-    E = edited_text
-    words = seg.get("words", [])
-    full = (seg["start"], seg["end"])
-    if not words or not E.strip():
-        return full
-    # 残る文字(equal/replace)のDインデックス範囲を求める（delete=削除のみカット対象）
-    sm = difflib.SequenceMatcher(None, list(D), list(E), autojunk=False)
-    kept = [i for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag in ("equal", "replace")
-            for i in range(i1, i2)]
-    if not kept:
-        return full
-    c2w = _char_to_word(D, words)
-    wf, wl = c2w[min(kept)], c2w[max(kept)]
-    if wf is None or wl is None:
-        return full
-    s = max(seg["start"], words[wf]["start"] - 0.08)
-    e = min(seg["end"], words[wl]["end"] + 0.12)
-    if e - s < 0.4:
-        e = min(seg["end"], s + 0.4)
-    return (s, e)
+    job.update(status="生成中", progress=55)
+    structure = generate_structure(cleaned, duration)
+    scenes, bgm_mood = parse_scenes(structure, cleaned, duration)
+    edit_video(video_path, scenes, output_path)
 
-def process_phase_build(job_id, selected_indices, texts):
-    """段階2：選ばれたシーン＋編集テキストで、編集→字幕→焼き込み→BGM→完成（1画面で確定）。
-    テキストで削除した部分は映像もカット（テキスト基準の編集）。"""
+    job["progress"] = 80
+    cues = build_word_cues(transcript.words, scenes)
+    subtitles = correct_segments(cues)
+    create_srt(subtitles, srt_path)
+
+    job["progress"] = 88
+    burn_subtitles(output_path, subtitles, subtitled_path)
+
+    job["progress"] = 95
+    bgm_path, _ = get_bgm(bgm_mood)
+    if bgm_path and mix_bgm(subtitled_path, bgm_path, final_path):
+        os.remove(subtitled_path)
+    else:
+        os.replace(subtitled_path, final_path)
+
+    job.update(status="完成", progress=100, output=final_path)
+
+def regenerate_job(job_id):
+    """同じ動画で別パターンを生成（文字起こしは再利用）。"""
     try:
-        job = jobs[job_id]
-        job.update(status="生成中", progress=75)
-        cand = job["candidates"]
-        job["last_selected"] = list(selected_indices)   # やり直し用に前回の編集内容を保持
-        job["last_texts"] = list(texts)
-        video_path = job["video_path"]
-        bgm_mood = job.get("bgm_mood", "")
-        output_path = f"{OUTPUT_FOLDER}/{job_id}_output.mp4"
-        srt_path = f"{OUTPUT_FOLDER}/{job_id}_subtitles.srt"
-        subtitled_path = f"{OUTPUT_FOLDER}/{job_id}_subtitled.mp4"
-        final_path = f"{OUTPUT_FOLDER}/{job_id}_final.mp4"
-
-        sel = sorted(i for i in selected_indices if 0 <= i < len(cand))
-        if not sel:   # 何も選ばれなければAIのおすすめにフォールバック
-            sel = [i for i, c in enumerate(cand) if c["selected"]] or [0]
-
-        # 選択された各セグメント → 1シーン。編集テキストで削った分は映像もトリム。
-        scenes, scene_text, prev_src_end = [], [], None
-        for i in sel:
-            seg = cand[i]
-            edited = texts[i].strip() if i < len(texts) and isinstance(texts[i], str) else seg["text"]
-            if not edited:                 # 全消し → そのシーンは使わない
-                continue
-            s, e = trimmed_range(seg, edited)
-            trans = "fade" if (prev_src_end is None or s - prev_src_end > 2.0) else "cut"
-            scenes.append({"start": s, "end": e, "transition": trans})
-            scene_text.append(edited)
-            prev_src_end = seg["end"]
-
-        if not scenes:                     # 全部消された場合の保険
-            seg = cand[sel[0]]
-            scenes = [{"start": seg["start"], "end": seg["end"], "transition": "cut"}]
-            scene_text = [seg["text"]]
-
-        edit_video(video_path, scenes, output_path)   # 各sceneに out_start/out_end が付く
-
-        # 字幕：各シーン（=トリム後クリップ）全体に、編集テキストを表示
-        job["progress"] = 85
-        subs = []
-        for sc, text in zip(scenes, scene_text):
-            subs.append({"start": sc["out_start"], "end": sc["out_end"], "text": text})
-        result = []
-        for c in sorted(subs, key=lambda x: x["start"]):
-            if c["end"] <= c["start"]:
-                c["end"] = c["start"] + 0.4
-            if result and c["start"] < result[-1]["end"]:
-                result[-1]["end"] = c["start"]
-            result.append(c)
-        subtitles = result
-
-        create_srt(subtitles, srt_path)
-        burn_subtitles(output_path, subtitles, subtitled_path)
-
-        job["progress"] = 95
-        bgm_path, _ = get_bgm(bgm_mood)
-        if bgm_path and mix_bgm(subtitled_path, bgm_path, final_path):
-            os.remove(subtitled_path)
-        else:
-            os.replace(subtitled_path, final_path)
-
-        job.update(status="完成", progress=100, output=final_path)
-
+        job = jobs.get(job_id)
+        if not job or "cleaned" not in job:
+            return
+        _generate_and_build(job_id)
     except Exception as e:
         jobs[job_id] = {"status": "エラー", "error": str(e)}
 
@@ -741,18 +645,12 @@ HTML = """
             <div class="progress-fill" id="progressFill" style="width: 0%"></div>
         </div>
     </div>
-    <div class="scene-area" id="sceneArea">
-        <h2>🎬 シーンを選んで字幕を直す</h2>
-        <p class="hint">✅＝動画に入れるシーン。テキストの<b>一部を消すとその部分の映像もカット</b>されます（誤字を直すだけなら映像はそのまま）。</p>
-        <div class="scene-list" id="sceneList"></div>
-        <button class="btn" id="sceneBtn" onclick="submitScenes()">この内容で動画を作成</button>
-    </div>
     <div class="download-area" id="downloadArea">
         <p style="color:#22c55e; font-size:18px; font-weight:600; margin-bottom:16px">✅ 完成しました！プレビューで確認できます</p>
-        <video id="previewVideo" class="preview-video" controls playsinline></video>
+        <video id="previewVideo" class="preview-video" controls playsinline autoplay></video>
         <div style="margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
             <a class="download-btn" id="downloadBtn" href="#">⬇️ ダウンロード</a>
-            <button class="btn-secondary" id="reEditBtn" onclick="reEdit()">✏️ 編集に戻ってやり直す</button>
+            <button class="btn-secondary" id="regenBtn" onclick="regenerate()">🔄 もう一度生成する</button>
         </div>
     </div>
     <div class="error-area" id="errorArea"></div>
@@ -775,8 +673,6 @@ async function uploadVideo() {
     document.getElementById('progressArea').style.display = 'block';
     document.getElementById('downloadArea').style.display = 'none';
     document.getElementById('errorArea').style.display = 'none';
-    document.getElementById('sceneArea').style.display = 'none';
-    document.getElementById('sceneBtn').disabled = false;
     const formData = new FormData();
     formData.append('video', selectedFile);
     const response = await fetch('/upload', { method: 'POST', body: formData });
@@ -791,10 +687,7 @@ function pollStatus() {
         const data = await response.json();
         document.getElementById('progressFill').style.width = data.progress + '%';
         document.getElementById('statusText').textContent = data.status;
-        if (data.status === '確認待ち') {
-            clearInterval(interval);
-            showSceneSelector();
-        } else if (data.status === '完成') {
+        if (data.status === '完成') {
             clearInterval(interval);
             const v = document.getElementById('previewVideo');
             v.src = '/video/' + jobId + '?t=' + Date.now();   // 毎回最新を読む
@@ -811,71 +704,13 @@ function pollStatus() {
     }, 2000);
 }
 
-function fmtTime(sec) {
-    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-    return m + ':' + String(s).padStart(2, '0');
-}
-
-async function showSceneSelector() {
-    const res = await fetch('/scenes/' + jobId);
-    const data = await res.json();
-    const list = document.getElementById('sceneList');
-    list.innerHTML = '';
-    data.scenes.forEach((sc, i) => {
-        const row = document.createElement('div');
-        row.className = 'scene-row' + (sc.selected ? ' on' : '');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = sc.selected;
-        cb.dataset.idx = i;
-        cb.onchange = () => row.classList.toggle('on', cb.checked);
-        const img = document.createElement('img');
-        img.className = 'thumb';
-        img.src = '/thumb/' + jobId + '/' + i;
-        img.loading = 'lazy';
-        img.style.cursor = 'pointer';
-        img.onclick = () => { cb.checked = !cb.checked; row.classList.toggle('on', cb.checked); };  // サムネクリックで選択切替
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.innerHTML = '<div class="t">' + fmtTime(sc.start) + ' 〜 ' + fmtTime(sc.end) + '</div>';
-        const ta = document.createElement('textarea');
-        ta.className = 'stxt';
-        ta.rows = 1;
-        ta.value = sc.text;
-        ta.dataset.idx = i;
-        meta.appendChild(ta);
-        row.appendChild(cb);
-        row.appendChild(img);
-        row.appendChild(meta);
-        list.appendChild(row);
-    });
-    document.getElementById('progressArea').style.display = 'none';
-    document.getElementById('sceneArea').style.display = 'block';
-}
-
-async function submitScenes() {
-    const rows = document.querySelectorAll('#sceneList .scene-row');
-    const texts = new Array(rows.length).fill('');
-    document.querySelectorAll('#sceneList .stxt').forEach(ta => { texts[parseInt(ta.dataset.idx)] = ta.value; });
-    const selected = [];
-    document.querySelectorAll('#sceneList input[type=checkbox]').forEach(b => { if (b.checked) selected.push(parseInt(b.dataset.idx)); });
-    document.getElementById('sceneBtn').disabled = true;
-    document.getElementById('sceneArea').style.display = 'none';
-    document.getElementById('progressArea').style.display = 'block';
-    await fetch('/select_scenes/' + jobId, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selected, texts })
-    });
-    pollStatus();
-}
-
-function reEdit() {
-    const v = document.getElementById('previewVideo');
-    v.pause();
+async function regenerate() {
+    document.getElementById('previewVideo').pause();
     document.getElementById('downloadArea').style.display = 'none';
-    document.getElementById('sceneBtn').disabled = false;
-    showSceneSelector();   // /scenes は前回の編集内容を反映して返す
+    document.getElementById('progressArea').style.display = 'block';
+    document.getElementById('statusText').textContent = '生成中';
+    await fetch('/regenerate/' + jobId, { method: 'POST' });
+    pollStatus();
 }
 </script>
 </body>
@@ -893,42 +728,16 @@ def upload():
     video_path = f"{UPLOAD_FOLDER}/{job_id}_{file.filename}"
     file.save(video_path)
     jobs[job_id] = {"status": "処理中", "progress": 0}
-    threading.Thread(target=process_phase_scenes, args=(job_id, video_path)).start()
+    threading.Thread(target=process_video_auto, args=(job_id, video_path)).start()
     return jsonify({"job_id": job_id})
 
-@app.route("/scenes/<job_id>")
-def get_scenes(job_id):
-    """候補シーン一覧を返す。やり直し時は前回の編集内容（選択・テキスト）を反映する。"""
-    job = jobs.get(job_id, {})
-    cand = job.get("candidates", [])
-    last_texts = job.get("last_texts")
-    last_selected = job.get("last_selected")
-    out = []
-    for i, c in enumerate(cand):
-        text = last_texts[i] if (last_texts and i < len(last_texts) and isinstance(last_texts[i], str)) else c["text"]
-        selected = (i in last_selected) if last_selected is not None else c["selected"]
-        out.append({"start": c["start"], "end": c["end"], "text": text, "selected": selected})
-    return jsonify({"scenes": out})
-
-@app.route("/thumb/<job_id>/<int:idx>")
-def thumb(job_id, idx):
-    """シーン候補のサムネイル画像を返す"""
-    path = f"{OUTPUT_FOLDER}/{job_id}_thumb_{idx}.jpg"
-    if os.path.exists(path):
-        return send_file(path, mimetype="image/jpeg")
-    return "", 404
-
-@app.route("/select_scenes/<job_id>", methods=["POST"])
-def select_scenes(job_id):
-    """選んだシーン(indices)と編集テキストを受け取り、編集→字幕→焼き込み→完成を開始する。
-    完成後でも（候補が残っていれば）やり直し再生成を受け付ける。"""
+@app.route("/regenerate/<job_id>", methods=["POST"])
+def regenerate(job_id):
+    """同じ動画で別パターンを生成（編集なし・全自動）"""
     job = jobs.get(job_id)
-    if not job or "candidates" not in job:
+    if not job or "cleaned" not in job:
         return jsonify({"error": "not ready"}), 400
-    data = request.get_json(force=True) or {}
-    selected = data.get("selected", [])
-    texts = data.get("texts", [])
-    threading.Thread(target=process_phase_build, args=(job_id, selected, texts)).start()
+    threading.Thread(target=regenerate_job, args=(job_id,)).start()
     return jsonify({"ok": True})
 
 @app.route("/video/<job_id>")
