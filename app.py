@@ -6,6 +6,7 @@ import subprocess
 import json
 import re
 import difflib
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont
 import shutil
 import openai
@@ -133,85 +134,96 @@ def _annotate_segments(cleaned_segments):
         lines.append(f"[{s['start']:.1f}秒〜{s['end']:.1f}秒]{note} {s['text']}")
     return "\n".join(lines)
 
-JSON_SPEC = '{"bgm_mood": "動画に合うBGMのムード", "scenes": [{"start": 開始秒, "end": 終了秒, "reason": "残した/つないだ理由", "transition": "cut または fade"}]}'
+JSON_SPEC = '{"bgm_mood": "動画に合うBGMのムード", "scenes": [{"start": 開始秒, "end": 終了秒, "reason": "選んだ理由", "transition": "cut または fade"}]}'
+
+# 構成（シーン判定）は最高性能モデルで文脈理解させる（品質最優先・コスト度外視）
+STRUCTURE_MODEL = "claude-opus-4-8"
+
+# best-of-3：それぞれ異なる編集方針で案を作り、審査で最良を選ぶ（多様性を確保）
+CANDIDATE_BRIEFS = [
+    "【方針：ハイライト凝縮】動画全体を見渡し、最も価値ある/面白い/印象的な瞬間だけを選び抜いて凝縮する。移動・繰り返し・平凡な説明は、間違いが無くても大胆に捨て、密度の高いショートにする。",
+    "【方針：ストーリー】導入→展開→山場→締めの流れが伝わるように場面を選ぶ。文脈のつながり・納得感・最後の余韻を最優先する。",
+    "【方針：フック＆テンポ】冒頭で一気に惹きつけ、テンポよく畳みかける。1場面を短めにして勢いを出し、中だるみを徹底的に排除する。",
+]
+
+def _shared_rules(duration):
+    return f"""【編集の考え方】
+ただ素材を切り詰めるのではなく、"文脈を理解して一番見ごたえのあるショートに再構成"してください。
+- 動画全体の内容を理解し、視聴者にとって価値のある/面白い/印象的な瞬間を「選び抜いて」凝縮する
+- 退屈な部分・冗長な説明・代わり映えしない場面は、たとえ言い間違いが無くても大胆にカットする（"きちんと編集された"と感じる密度に仕上げる）
+- 冒頭で必ず惹きつける（弱い前置き・自己紹介・フィラーで始めない）
+- 全体に起承転結のリズムを持たせ、最後はきちんと締める
+
+【素材の質の手がかり】（必ず活用する）
+- "○秒の間" の注記＝無音・余白。話が途切れているサイン → 原則カット。残す場合もシーンを分けて間を映像から消す
+- "聞き取りが怪しい" の注記＝言い間違い・単語の崩れ・不明瞭の可能性が高い → 原則カット
+- 文の途中・言い切る前で終わるセグメントは選ばない（文章として完結させる）
+- 文脈がつながらない・唐突なセグメントはカットする
+
+【シーンの作り方（厳守）】
+- 各シーンの start/end は、上の[開始秒〜終了秒]の値とそのまま一致させる（途中の秒で切らない）
+- 連続して話がつながるセグメントは1シーンにまとめてよい。"○秒の間"がある所はシーンを分ける
+- シーンは時系列順（startの昇順）、重複なし、start/end は 0以上{duration:.1f}以下
+- 長さは20〜50秒目安。"選び抜いて凝縮"を優先し、長く残しすぎない
+- bgm_mood は動画全体に合うムードを1つ。transition は基本"cut"、話題が大きく変わる所だけ"fade\""""
+
+def _structure_json(prompt, retries=2):
+    """構成生成の1コール。失敗時はリトライし、有効な scenes 付き JSON文字列を返す（無ければ None）。"""
+    for _ in range(retries + 1):
+        try:
+            msg = anthropic_client.messages.create(
+                model=STRUCTURE_MODEL, max_tokens=2500,
+                messages=[{"role": "user", "content": prompt}])
+            txt = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+            if json.loads(txt).get("scenes"):
+                return txt
+        except Exception:
+            continue
+    return None
 
 def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
-    """内容と文脈を理解し、無駄（余白・聞き取りの崩れ・文脈切れ）を削ってテンポよくまとめる。
-    派手に並べ替えず、元の流れを活かして"いらない所を削る"のが基本方針。"""
+    """Opusで文脈を理解し、3つの編集方針で案を作って審査で最良を選ぶ（best-of-3＋判定）。
+    素材を切り詰めるのではなく、見どころを選び抜いて凝縮した"ベストな編集"を狙う。"""
     annotated = _annotate_segments(cleaned_segments)
+    rules = _shared_rules(duration)
 
     redo_block = ""
     if prev_choices and note:
         past = "案{}: {}".format(len(prev_choices),
                                  "、".join(f"{a:.0f}-{b:.0f}秒" for a, b in prev_choices[-1]) or "（なし）")
-        redo_block = f"\n【もう一度生成】編集の哲学は同じまま、{note}\n前回の構成: {past}\n"
+        redo_block = f"\n【もう一度生成】{note}\n前回の構成: {past}\n（前回と取捨選択を変え、別の良い編集に見せる）\n"
 
-    propose_prompt = f"""あなたはプロのショート動画編集者です。
-以下は{duration:.1f}秒の動画の文字起こしです。各行が1セグメントで、[開始秒〜終了秒]と、必要なら（注記）が付いています。
+    # 1) 3つの編集方針で候補を並列生成（多様性を確保）
+    def make(brief):
+        prompt = (f"あなたは一流のショート動画編集者です。\n"
+                  f"以下は{duration:.1f}秒の動画の文字起こしです（各行=1セグメント、[開始秒〜終了秒]と、必要なら（注記）付き）。\n\n"
+                  f"{annotated}\n\n{rules}\n\n{brief}\n{redo_block}\n"
+                  f"以下のJSON形式のみで答えてください（他の文章は不要）。\n{JSON_SPEC}")
+        return _structure_json(prompt)
 
-{annotated}
+    with ThreadPoolExecutor(max_workers=len(CANDIDATE_BRIEFS)) as ex:
+        candidates = [c for c in ex.map(make, CANDIDATE_BRIEFS) if c]
 
-内容と文脈を理解した上で、無駄を削ってテンポよくまとめた縦型ショートにしてください。
-派手に並べ替えるのではなく、"元の流れを活かして不要な所を削る"のが基本方針です。
-{redo_block}
-【編集ルール】（シンプルに、確実に守る）
-1. 基本は最初から時系列順につなぐ（場面を勝手に入れ替えない）。ただし冒頭が「えーと/あの」等のフィラー・ただの前置き・自己紹介・無言なら、そこは飛ばして本題から始める
-2. 「間（余白・無音）」は削る。"○秒の間"の注記が付いたセグメントは話が途切れているサイン → 原則カット。残す場合も前後と別シーンに分けて間を映像から消す
-3. 文脈がつながらないセグメントはカット（前後と話がつながらない・脈絡なく飛ぶ・唐突な所）
-4. "聞き取りが怪しい"注記のセグメントは、言い間違い・単語の崩れ・不明瞭の可能性が高い → 原則カット
-5. 言い直し・冗長な繰り返し・どうでもいい雑談・言いよどみはカット
-6. 残すセグメントは"文章として完結"していること（文の途中・言い切る前で切らない）。前後が意味としてつながるように選ぶ
-→ 結果として「最初からテンポよく・余白がなく・話の筋が通った」動画にする
+    if not candidates:
+        return '{"scenes": []}'
+    if len(candidates) == 1:
+        return candidates[0]
 
-【シーンの作り方（絶対ルール）】
-- 各シーンの start / end は、上の[開始秒〜終了秒]の値とそのまま一致させる（途中の秒で切らない）
-- 連続していて(間が無く)話がつながるセグメントだけを1シーンにまとめてよい。"○秒の間"がある所はシーンを分ける（その間を映像からカットするため）
-- シーンは時系列順（startの昇順）、重複なし、start/endは0以上{duration:.1f}以下
-- 全体の長さは30〜60秒目安（無駄なく筋が通る範囲で。短くしすぎない）
-
-bgm_mood は動画全体に合うムードを1つ。transition は基本"cut"、話題が大きく変わる所だけ"fade"。
-
-以下のJSON形式のみで答えてください（他の文章は不要）。
-{JSON_SPEC}
-"""
-
-    msg1 = anthropic_client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=1500,
-        temperature=0.7 if prev_choices else 0.4,
-        messages=[{"role": "user", "content": propose_prompt}])
-    proposal = msg1.content[0].text.replace("```json", "").replace("```", "").strip()
-
-    # 自己レビュー：編集ルールに違反していないか点検して直す（精度を底上げ）
-    try:
-        msg2 = anthropic_client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1500, temperature=0.2,
-            messages=[{"role": "user", "content": f"""あなたは厳しい編集ディレクターです。以下は文字起こし（注記つき）と、それに対するショート構成案です。
-
-# 文字起こし（[開始秒〜終了秒]（注記））
-{annotated}
-
-# 構成案（JSON）
-{proposal}
-
-下の編集ルールに照らして構成案を点検し、違反を直した「最終構成」を出してください。
-- 時系列順か（不要な並べ替えをしていないか）
-- "○秒の間"の所が残っていないか（残っていれば外す／シーンを分けて間を消す）
-- "聞き取りが怪しい"所が残っていないか（残っていれば外す）
-- 文脈がつながらない・唐突なセグメントが混じっていないか（外す）
-- 文の途中で切れているシーンが無いか（完結させる）
-- 最初からテンポよく、余白なくつながっているか
-
-厳守：start/endは上記の値と一致／時系列順／重複なし／0〜{duration:.1f}秒。改善不要ならそのままでよい。
-
-以下のJSON形式のみで答えてください（他の文章は不要）。
-{JSON_SPEC}
-"""}])
-        refined = msg2.content[0].text.replace("```json", "").replace("```", "").strip()
-        if json.loads(refined).get("scenes"):
-            return refined
-    except Exception:
-        pass
-    return proposal
+    # 2) 審査：3案を比較して最良を選び、最小限だけ磨く
+    cand_block = "\n\n".join(f"## 候補{i + 1}\n{c}" for i, c in enumerate(candidates))
+    judge_prompt = (f"あなたは一流の編集ディレクターです。同じ素材から作った{len(candidates)}つのショート構成案を比較し、"
+                    f"\"最も完成度の高いショート動画になる案\"を1つ選び、必要なら最小限だけ磨いて「最終構成」を出してください。\n\n"
+                    f"# 文字起こし（[開始秒〜終了秒]（注記））\n{annotated}\n\n# 構成案\n{cand_block}\n\n"
+                    "評価基準（重要な順）:\n"
+                    "1. 冒頭で強く惹きつけられるか（弱い前置き・フィラー始まりは大きく減点）\n"
+                    "2. 一番の見どころ・価値・オチが入っているか\n"
+                    "3. 退屈/冗長/代わり映えしない部分が無く、\"編集された\"密度があるか\n"
+                    "4. 文脈が通り、起承転結で完結しているか（ぶつ切りでない）\n"
+                    "5. \"○秒の間\"や\"聞き取りが怪しい\"所が残っていないか\n"
+                    "6. テンポが良いか\n\n"
+                    f"{rules}\n\n"
+                    f"以下のJSON形式のみで答えてください（他の文章は不要）。\n{JSON_SPEC}")
+    return _structure_json(judge_prompt) or candidates[0]
 
 def remove_overlapping_scenes(scenes):
     scenes = sorted(scenes, key=lambda x: x["start"])
