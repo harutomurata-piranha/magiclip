@@ -608,9 +608,27 @@ def _generate_and_build(job_id):
     job.setdefault("prev_choices", []).append([(round(s["start"], 1), round(s["end"], 1)) for s in scenes])
     edit_video(video_path, scenes, output_path)
 
-    job["progress"] = 80
-    cues = build_word_cues(transcript.words, scenes)
-    subtitles = correct_segments(cues)
+    # 字幕：編集後の動画の音声を文字起こしして時刻を取る（表示する音声そのものなので必ず同期する）
+    job["progress"] = 78
+    edited_audio_path = f"{OUTPUT_FOLDER}/{job_id}_edited_audio.mp3"
+    extract_audio(output_path, edited_audio_path)
+    edited_tr = transcribe_audio(edited_audio_path)
+    cues = []
+    for s in edited_tr.segments:
+        if not is_clear_segment(s):       # 無音・低信頼・相槌だけは除外
+            continue
+        text = s.text.strip()
+        if text:
+            cues.append({"start": s.start, "end": s.end, "text": text})
+    cues.sort(key=lambda x: x["start"])
+    clamped = []
+    for c in cues:
+        if c["end"] <= c["start"]:
+            c["end"] = c["start"] + 0.4
+        if clamped and c["start"] < clamped[-1]["end"]:
+            clamped[-1]["end"] = c["start"]   # 重なり解消
+        clamped.append(c)
+    subtitles = correct_segments(clamped)
     create_srt(subtitles, srt_path)
 
     job["progress"] = 88
