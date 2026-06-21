@@ -143,9 +143,10 @@ SUBTITLE_MODEL = "claude-haiku-4-5-20251001"
 def _shared_rules(duration):
     return f"""【MagiClipの編集哲学】どんな素材でも"自然で心を動かすショート"にするための普遍原則。これを編集判断の核に置く。
 
-① 最初の3秒で心を掴む
-- 一番インパクトのある瞬間・言葉から始める。弱い前置き・挨拶・自己紹介・状況説明は必ず外す
-- 見た人が「え、なに？」と続きを見たくなる入りにする
+① 最初の3秒で心を掴む（※物語性を壊さない範囲で）
+- 弱い前置き・挨拶・自己紹介・状況説明は外し、最初から"強い・面白い所"で始める
+- ただし時系列は保つ＝場面を前後に入れ替えない。冒頭は「使える中で最も惹きつける"早い"場面」にする
+- 見た人が「え、なに？」と続きを見たくなる入りを、時系列の流れの中で作る
 
 ② 感情の起伏（リズム）を作る
 - 速いカット→少し長めのカット→速いカット、と緩急をつける
@@ -172,7 +173,7 @@ def _shared_rules(duration):
 【シーンの作り方（厳守）】
 - 各シーンの start/end は、上の[開始秒〜終了秒]の値とそのまま一致させる（途中の秒で切らない）
 - 連続して話がつながる場面は1シーンにまとめてよい。"○秒の間"がある所はシーンを分ける
-- 並び順：①のため"最もインパクトのある場面を冒頭"に置いてよい。その後はおおむね時系列の自然な流れにし、脈絡なく飛び回らない。同じ映像の重複は入れない
+- 並び順：シーンは時系列順（startの昇順）。物語が伝わる自然な流れを最優先し、場面を前後に入れ替えない。同じ映像の重複は入れない（フックは"弱い導入を外して強い所から始める"ことで作る＝並べ替えではない）
 - start/end は 0以上{duration:.1f}以下
 - 長さは哲学に従った結果でよい（"一つのこと"に絞れば自然と引き締まる）。短くするために核や締めを削らない
 - bgm_mood は動画全体の感情に合うムードを1つ"""
@@ -234,23 +235,27 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
               f"どんな素材でも自然で心を動かすショートに編集してください。\n"
               f"以下は{duration:.1f}秒の動画の文字起こしです（各行=1セグメント、[開始秒〜終了秒]と、必要なら（注記）付き）。\n\n"
               f"{annotated}\n\n{analysis_block}{rules}\n{redo_block}\n"
-              f"原則を最優先に：①冒頭3秒で掴む（弱い前置きは外す）②速い→長い→速いのリズム③核は一つに絞る"
-              f"④人間味を消さない⑤余韻のある締めで終わる。分析で挙げた『核』『冒頭フック』『締め』は必ず活かす。\n"
+              f"原則を最優先に：①冒頭3秒で掴む（弱い前置きは外し、時系列のまま強い所から始める）"
+              f"②速い→長い→速いのリズム③核は一つに絞る④人間味を消さない⑤余韻のある締めで終わる。\n"
+              f"物語性を最優先：場面は時系列順を保ち、前後に入れ替えない。分析で挙げた『核』『締め』は必ず活かす。\n"
               f"以下のJSON形式のみで答えてください（他の文章は不要）。\n{JSON_SPEC}")
     return _structure_json(prompt) or '{"scenes": []}'
 
 def remove_overlapping_scenes(scenes):
-    """AIが決めた並び順（①の冒頭フック等）を保ったまま、同じ映像の重複だけ除く。
-    以前は時系列ソートしていたが、それだと冒頭に置いたフックが元の位置へ戻ってしまうため順序を尊重する。"""
-    result, accepted = [], []
-    for sc in scenes:
-        s, e = sc["start"], sc["end"]
-        # すでに採用した区間と大きく重なる（同じ映像の二重表示）なら飛ばす
-        if any(min(e, ae) - max(s, a_s) > 0.3 for a_s, ae in accepted):
-            continue
-        accepted.append((s, e))
-        result.append(sc)
-    return result
+    """時系列順に並べ、重複（同じ映像の二重表示）を除く。
+    物語性を重視し、場面の順序は時系列を保つ（フックの前出し＝並べ替えはしない）。"""
+    scenes = sorted(scenes, key=lambda x: x["start"])
+    cleaned = []
+    last_end = -1
+    for scene in scenes:
+        if scene["start"] >= last_end:
+            cleaned.append(scene)
+            last_end = scene["end"]
+        elif scene["end"] > last_end:
+            scene["start"] = last_end
+            cleaned.append(scene)
+            last_end = scene["end"]
+    return cleaned
 
 FADE_DUR = 0.15
 
