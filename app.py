@@ -625,6 +625,58 @@ def render_subtitle_png(text, w, h, path):
         start_y += line_height
     img.save(path)
 
+def _render_watermark_png(w, h, path, alpha=150):
+    """透かし「✦ MagiClip」を右下に描いた全画面透過PNGを作る（白・半透明）。
+    ✦は環境フォント非依存で描けるようPILで4方向スパークを多角形描画する。"""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    size = max(26, w // 36)            # 動画幅に合わせた文字サイズ
+    try:
+        font = ImageFont.truetype(SUBTITLE_FONT, size) if SUBTITLE_FONT else ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()
+    text = "MagiClip"
+    tb = draw.textbbox((0, 0), text, font=font)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    spark = size // 2                  # スパークの半径
+    gap = size // 4
+    margin = max(36, w // 24)
+    block_h = max(th, spark * 2)
+    x = w - margin - (spark * 2 + gap + tw)
+    y = h - margin - block_h
+    white = (255, 255, 255, alpha)
+    # ✦ スパーク（4方向の星）を描画
+    cx, cy = x + spark, y + block_h // 2
+    inner = spark * 0.36
+    pts = [(cx, cy - spark), (cx + inner, cy - inner), (cx + spark, cy), (cx + inner, cy + inner),
+           (cx, cy + spark), (cx - inner, cy + inner), (cx - spark, cy), (cx - inner, cy - inner)]
+    draw.polygon(pts, fill=white)
+    # ワードマーク
+    draw.text((x + spark * 2 + gap, cy - th // 2 - tb[1]), text, font=font, fill=white)
+    img.save(path)
+
+
+def add_watermark(input_path, output_path):
+    """動画の右下に「✦ MagiClip」の透かし（白・半透明）を焼き込む。成功で True。"""
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", input_path],
+                           capture_output=True, text=True)
+    try:
+        w, h = (int(x) for x in probe.stdout.strip().split("x"))
+    except ValueError:
+        w, h = 1080, 1920
+    wm = os.path.splitext(output_path)[0] + "_wm.png"
+    _render_watermark_png(w, h, wm)
+    r = subprocess.run(["ffmpeg", "-y", "-i", input_path, "-i", wm,
+                        "-filter_complex", "[0:v][1:v]overlay=0:0",
+                        "-c:a", "copy", output_path], capture_output=True)
+    try:
+        os.remove(wm)
+    except OSError:
+        pass
+    return r.returncode == 0
+
+
 def burn_subtitles(input_path, subtitles, output_path):
     """字幕を透過PNGとしてoverlayで1パス合成する（全フレーム展開せず高速・無劣化）"""
     if not subtitles:
@@ -730,6 +782,11 @@ def _generate_and_build(job_id):
     else:
         os.replace(subtitled_path, final_path)
 
+    # 透かし「✦ MagiClip」を右下に焼き込む（仕上げ）
+    wm_final = f"{OUTPUT_FOLDER}/{job_id}_wm_final.mp4"
+    if add_watermark(final_path, wm_final):
+        os.replace(wm_final, final_path)
+
     job.update(status="完成", progress=100, output=final_path)
 
 def regenerate_job(job_id):
@@ -748,12 +805,18 @@ HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>動画AI編集ツール</title>
+    <title>MagiClip — 動画AI編集</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 1 L14.2 9.8 L23 12 L14.2 14.2 L12 23 L9.8 14.2 L1 12 L9.8 9.8 Z' fill='%237C3AED'/></svg>">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, sans-serif; background: #0f0f0f; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
         .container { width: 100%; max-width: 480px; padding: 40px 20px; }
         h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+        .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .logo-spark { width: 30px; height: 30px; fill: #7C3AED; flex-shrink: 0; filter: drop-shadow(0 0 7px rgba(124,58,237,.45)); }
+        .logo-text { font-size: 30px; font-weight: 800; letter-spacing: .5px;
+                     background: linear-gradient(135deg, #7C3AED, #A78BFA);
+                     -webkit-background-clip: text; background-clip: text; color: transparent; }
         p.sub { color: #888; margin-bottom: 40px; font-size: 15px; }
         .upload-area { border: 2px dashed #333; border-radius: 16px; padding: 60px 20px; text-align: center; cursor: pointer; transition: all 0.2s; }
         .upload-area:hover { border-color: #555; background: #1a1a1a; }
@@ -800,7 +863,12 @@ HTML = """
 </head>
 <body>
 <div class="container">
-    <h1>✨ 動画AI編集</h1>
+    <div class="logo">
+        <svg class="logo-spark" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 1 L14.2 9.8 L23 12 L14.2 14.2 L12 23 L9.8 14.2 L1 12 L9.8 9.8 Z"/>
+        </svg>
+        <span class="logo-text">MagiClip</span>
+    </div>
     <p class="sub">動画をアップロードするだけで、字幕付きショート動画を自動生成します</p>
     <div class="upload-area" onclick="document.getElementById('fileInput').click()">
         <input type="file" id="fileInput" accept="video/*" onchange="handleFileSelect(event)">

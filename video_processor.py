@@ -67,6 +67,10 @@ def _finalize(cut_path, subtitles, bgm_mood, stem, output_path):
             os.remove(subtitled)
     else:
         os.replace(subtitled, output_path)
+    # 透かし「✦ MagiClip」を右下に焼き込む（仕上げ）
+    wm = stem + "_wm_final.mp4"
+    if E.add_watermark(output_path, wm):
+        os.replace(wm, output_path)
     return output_path
 
 

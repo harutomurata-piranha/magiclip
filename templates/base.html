@@ -4,11 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}MagiClip{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 1 L14.2 9.8 L23 12 L14.2 14.2 L12 23 L9.8 14.2 L1 12 L9.8 9.8 Z' fill='%237C3AED'/></svg>">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <header class="nav">
-    <a class="brand" href="{{ url_for('index') }}">✨ MagiClip</a>
+    <a class="brand" href="{{ url_for('index') }}">
+      <svg class="brand-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 L14.2 9.8 L23 12 L14.2 14.2 L12 23 L9.8 14.2 L1 12 L9.8 9.8 Z"/></svg>
+      <span class="brand-text">MagiClip</span>
+    </a>
     <nav>
       {% if current_user.is_authenticated %}
         <a href="{{ url_for('upload') }}">作成</a>
