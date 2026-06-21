@@ -137,6 +137,8 @@ JSON_SPEC = '{"bgm_mood": "動画に合うBGMのムード", "scenes": [{"start":
 
 # 構成（シーン判定）・分析は Sonnet で文脈理解（コストと品質のバランス）
 STRUCTURE_MODEL = "claude-sonnet-4-6"
+# 字幕の校正・簡潔化に使うモデル（軽量・低コスト）
+SUBTITLE_MODEL = "claude-haiku-4-5-20251001"
 
 def _shared_rules(duration):
     return f"""【編集の考え方（プロの編集）】
@@ -360,38 +362,40 @@ def mix_bgm(video_path, bgm_path, output_path, volume=0.15):
     ], capture_output=True)
     return result.returncode == 0
 
+CORRECT_MIN_RATIO = 0.35   # 校正結果が元とこれ未満しか一致しなければ「別物に化けた」とみなし元を採用
+
 def correct_segments(segments, reference=""):
-    """字幕テキストを保守的に整える。ミスを増やさないことが最優先。
-    reference に動画全体の文字起こしを渡すと、文脈から崩れた語（数字・一般語）を直しやすくなる。
+    """字幕テキストを"控えめに"整える。最優先は『音声と字幕が一致していること』。
+    各行を1:1で軽く整えるだけ（言い換え・要約・統合・並べ替えは禁止）。誤字脱字とフィラーのみ補正。
+    reference は崩れた語の確認だけに使う（本文に持ち込まない）。
     入力・出力ともに [{start, end, text}] のリスト（タイミングは変えない）。"""
     if not segments:
         return []
     numbered = ""
     for i, seg in enumerate(segments):
         numbered += f"[{i}] {seg['text'].strip()}\n"
-    ref_block = (f"\n【参考：この動画全体の文字起こし】（崩れた語を直すヒント。数字・金額・一般語の取り違えはこれを根拠に直す。固有名詞は無理に変えない）\n{reference}\n"
+    ref_block = (f"\n【参考：動画全体の文字起こし】（崩れた語を確認するためだけに使う。ここから本文に語を持ち込まない）\n{reference}\n"
                  if reference else "")
     try:
         message = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",   # 字幕の誤字訂正・簡潔化は軽量モデルで（コスト削減）
+            model=SUBTITLE_MODEL,
             max_tokens=2000,
             messages=[{"role": "user", "content": f"""
-以下は動画の音声を自動認識した日本語字幕です。各行の [i] 番号はそのまま残し、テキストを「読みやすい字幕」に整えてください。
+以下は動画の音声を自動認識した日本語字幕です。各行 [i] の番号・行数・順序を必ず保ち、テキストを"控えめに"整えてください。
+最優先は「音声と字幕が一致していること」。話した言葉のまま残すのが基本です。
 {ref_block}
+【やること（控えめに）】
+- 明らかな誤字・変換ミスだけ直す（例：「以外と」→「意外と」「気ずく」→「気づく」「下さい」→「ください」）
+- 行頭の言い淀み・フィラーだけ削る（えーと/あの/その/えー/まあ/なんか）。本文の語は残す
+- 同じ行内の直後の重複だけ1つにする（例：「ローソン ローソンが」→「ローソンが」）。行をまたぐ統合はしない
+- 句読点（。や、）は付けない。区切りは半角スペース
 
-【整える内容】
-- ★短く簡潔にする（最重要）：冗長な言い回し・くどい修飾・口癖・どうでもいい脱線を削り、要点が一目で読めるテンポの良い字幕にする。長い字幕ほど積極的に短くする
-  例：「地元で結構有名な飲食がいっぱいある会館で」→「地元で有名な飲食会館」、「っていう」「みたいな」「な感じ」「結構」「なんか」「ちょっと」などの埋め草を削る、「〜なんですけど」→「〜です」
-- ★明らかな誤字・脱字・変換ミスを直す（最重要）：自動認識にありがちな同音異義語の取り違えや変換ミスを、文脈から正しい語が明らかなものは直す
-  例：「以外と」→「意外と」、「いう事」→「いうこと」、「気ずく」→「気づく」、「下さい」→「ください」、脱字の補完、助詞の取り違え（てにをは）など
-- 言い淀み・フィラーを削除する：「えーと」「あの」「その」「えー」「あ、」「まあ」「なんか」「こう」など
-- 言い直し・直後の重複を1つにまとめる（例：「ローソン、ローソンが」→「ローソンが」）
-- 句読点（。や、）は付けない。区切りが必要なら半角スペースで表現する（ショート動画の字幕スタイル）
-
-【守ること（ミスを増やさない）】
-- 店名・地名・人名などの固有名詞・数字は、確信が持てなければ変更しない（推測で別の漢字・別の語に置き換えない）。ただし固有名詞"以外"の一般語の明らかな誤字は積極的に直してよい
-- 話の意味・事実は変えない。情報を足さない。勝手な"言い換え"や"要約"で別の言葉にはしない（実際に話した言葉を使う）。※冗長な語を削って"短くする"のはむしろ推奨
-- [i] 番号付きの形式のまま、入力と同じ行数で出力する。空文字にはしない。説明や注釈は不要
+【禁止（字幕ズレの原因になる）】
+- 要約・言い換え・短縮で別の表現にしない（実際に話した言葉のまま。長くても短くしない）
+- 行をまとめる・分ける・順番を変える・別の行の内容を持ち込まない
+- 入力に無い語を足さない（上の参考は崩れた語の"確認"だけ。本文に持ち込まない）
+- 固有名詞・数字は確信が無ければ変えない
+- [i] の個数・順序は入力と完全一致。各 [i] は同じ [i] の入力だけを直したものにする
 
 テキスト：
 {numbered}
@@ -399,21 +403,23 @@ def correct_segments(segments, reference=""):
         )
         out = message.content[0].text.strip()
     except Exception:
-        return [dict(s) for s in segments]  # 校正失敗時は原文のまま
+        return [dict(s) for s in segments]  # 校正失敗時は原文のまま（ズレを出さない）
 
     # [i] で分割して index→テキスト の対応表を作る（マーカー欠落でも後続を巻き込まない）
     parts = re.split(r'\[(\d+)\]', out)
     parsed = {}
     for k in range(1, len(parts) - 1, 2):
-        text = parts[k + 1]
-        text = re.sub(r'\[\d+\]', '', text)
-        text = ' '.join(text.split())
-        parsed[int(parts[k])] = text.strip()
+        text = re.sub(r'\[\d+\]', '', parts[k + 1])
+        parsed[int(parts[k])] = ' '.join(text.split()).strip()
 
     corrected = []
     for i, seg in enumerate(segments):
-        text = parsed.get(i, "").strip() or seg["text"].strip()
-        corrected.append({"start": seg["start"], "end": seg["end"], "text": text,
+        orig = seg["text"].strip()
+        new = parsed.get(i, "").strip()
+        # ★安全網：校正結果が元と大きく食い違ったら（別の行に化けた・幻字幕）元を採用してズレを防ぐ
+        if not new or difflib.SequenceMatcher(None, orig, new).ratio() < CORRECT_MIN_RATIO:
+            new = orig
+        corrected.append({"start": seg["start"], "end": seg["end"], "text": new,
                           "orig_start": seg.get("orig_start"), "orig_end": seg.get("orig_end")})
     return corrected
 
