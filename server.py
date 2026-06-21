@@ -5,6 +5,7 @@ AI編集エンジンは video_processor.process_video() に分離してあり、
 画面: LP / 登録・ログイン / プラン選択 / Stripe決済 / マイpage / アップロード / 処理中 / 完成
 """
 import os
+import json
 import uuid
 import threading
 
@@ -18,7 +19,7 @@ from werkzeug.utils import secure_filename
 
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
-from video_processor import process_video, reedit_textbased, load_edit_data, list_segments
+from video_processor import process_video, load_edit_data, list_words, reedit_words
 
 
 def _friendly_error(e):
@@ -340,26 +341,32 @@ def create_app():
         return send_file(job.output_path, as_attachment=True,
                          download_name=f"magiclip_{job_id}.mp4")
 
-    # ---------------- プロ編集（字幕・カット修正）----------------
+    # ---------------- プロ編集（言葉起点：単語を消すと映像も短くなる）----------------
     @app.route("/edit/<job_id>", methods=["GET", "POST"])
     @login_required
     def edit(job_id):
         job = _owned_job(job_id)
-        segments = list_segments(job.output_path) if job.output_path else []
-        if not segments:
+        words = list_words(job.output_path) if job.output_path else []
+        if not words:
             flash("この動画には編集データがありません。", "error")
             return redirect(url_for("result", job_id=job_id))
 
         if request.method == "POST":
-            # テキストベース編集：チェックした区間（AIが選ばなかった所も含む）だけを集める。
-            # 選んだ区間の映像だけが残る＝字幕の取捨選択がそのままカットになる。
+            # 単語チップの編集結果(JSON)を受け取る：残した単語(keep)＋直したテキスト。
+            # 残した単語の映像だけが繋がる＝文字を消すとカットも短くなる。
+            try:
+                edited = json.loads(request.form.get("words_json", "[]"))
+            except ValueError:
+                edited = []
+            by_i = {w["i"]: w for w in words}
             kept = []
-            for i, seg in enumerate(segments):
-                if request.form.get(f"keep_{i}"):
-                    kept.append({"text": request.form.get(f"text_{i}", ""),
-                                 "orig_start": seg["start"], "orig_end": seg["end"]})
+            for w in edited:
+                if w.get("keep") and w.get("i") in by_i:
+                    src = by_i[w["i"]]
+                    kept.append({"i": w["i"], "text": (w.get("text") or src["text"]),
+                                 "start": src["start"], "end": src["end"]})
             if not kept:
-                flash("少なくとも1つの場面を選んでください。", "error")
+                flash("少なくとも1つの言葉を残してください。", "error")
                 return redirect(url_for("edit", job_id=job_id))
             job.status = "処理中"
             db.session.commit()
@@ -367,16 +374,16 @@ def create_app():
                              daemon=True).start()
             return redirect(url_for("processing", job_id=job_id))
 
-        return render_template("edit.html", job=job, segments=segments)
+        return render_template("edit.html", job=job, words=words)
 
-    def _run_reedit(flask_app, job_id, output_path, kept_lines):
+    def _run_reedit(flask_app, job_id, output_path, kept_words):
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
             job.error = None
             db.session.commit()
             try:
-                reedit_textbased(output_path, kept_lines)
+                reedit_words(output_path, kept_words)
                 job.status = "完成"
             except Exception as e:
                 job.status = "エラー"

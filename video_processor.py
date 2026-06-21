@@ -117,6 +117,126 @@ def list_segments(output_path):
     return segs
 
 
+def words_of(data):
+    return data.get("words", [])
+
+
+# チップ（編集の単位）の区切り：句読点＋文節末になりやすい助詞。語の途中で割れにくい文節サイズにする
+_CHIP_BREAK = set("、。！？はがをにへとでもねよわ")
+
+
+def _group_chips(words):
+    """whisperの細かい単語トークンを"文節サイズ"のチップにまとめる（郵/便/局→郵便局ですね）。
+    各チップ: {text, start, end, br}（br=直前と間が空く＝改行の目印）。"""
+    chips, cur, cstart, cend, prev_end, pending_br = [], "", None, None, None, False
+
+    def flush():
+        nonlocal cur, cstart, cend, pending_br
+        if cur.strip():
+            chips.append({"text": cur, "start": cstart, "end": cend, "br": pending_br})
+            pending_br = False
+        cur, cstart, cend = "", None, None
+
+    for w in words:
+        s = w.get("start")
+        if s is None:
+            continue
+        e = w.get("end") or s
+        if cstart is not None and prev_end is not None and (s - prev_end) >= 0.4:
+            flush()
+            pending_br = True          # 間＝次チップの前で改行
+        if cstart is None:
+            cstart = s
+        cur += w["word"]
+        cend = e
+        prev_end = e
+        last = cur.rstrip("　 ")[-1:]
+        if (last in _CHIP_BREAK and len(cur) >= 2) or len(cur) >= 10:
+            flush()
+    flush()
+    return chips
+
+
+def list_words(output_path):
+    """プロ編集（言葉起点）画面用：動画の“全文”を文節チップで返す。
+    - selected: AIが採用した区間にあるチップ（既定でON）。未採用も含め全チップを返す
+    - text: 表示/編集する文字（過去の編集があればそれを反映）
+    - br: 改行の目印（読みやすさ）
+    ユーザーはチップを消す→その映像も短くなる、未採用のチップを足す、誤字を直す、ができる。
+    """
+    data = load_edit_data(output_path)
+    if not data:
+        return []
+    ai = [(sc["start"], sc["end"]) for sc in data.get("scenes", [])]
+    edits = data.get("word_edits", {})          # {chip_index: 直したテキスト}
+    keep = data.get("word_keep")                # 前回残したchip index（無ければAI採用で初期化）
+
+    def in_ai(s, e):
+        return any(s < ae and e > a_s for a_s, ae in ai)
+
+    chips = _group_chips(words_of(data))
+    # 旧形式（単語index）など、チップ数と整合しない保存データは無視してAI採用にフォールバック
+    if keep is not None and any(int(k) >= len(chips) for k in keep):
+        keep, edits = None, {}
+
+    out = []
+    for i, ch in enumerate(chips):
+        sel = (i in keep) if keep is not None else in_ai(ch["start"], ch["end"])
+        out.append({
+            "i": i,
+            "text": edits.get(str(i), ch["text"]),
+            "start": ch["start"], "end": ch["end"],
+            "selected": sel, "br": ch["br"],
+        })
+    return out
+
+
+def reedit_words(output_path, kept):
+    """言葉起点の再編集：残した単語だけから映像を切り直す。
+    kept = [{"i","text","start","end"}]（消した単語は含めない）。
+    『単語を消す＝その区間の映像も消える／文字を直す＝字幕も直る』を実現する。"""
+    data = load_edit_data(output_path)
+    if not data:
+        raise RuntimeError("編集データが見つかりません")
+    stem = _stem(output_path)
+    items = sorted([w for w in kept if w.get("start") is not None and w.get("end") is not None],
+                   key=lambda w: w["start"])
+    if not items:
+        raise RuntimeError("残す言葉がありません")
+
+    # 残した単語を時系列に並べ、隣り合う（間がごく短い）ものは1シーンに繋ぐ。
+    # 消した単語の所は間が空く→そこでシーンが分かれる＝映像がカットされる。
+    GAP = 0.12
+    scenes = []
+    for w in items:
+        s, e = float(w["start"]), float(w["end"])
+        if scenes and s - scenes[-1]["end"] <= GAP:
+            scenes[-1]["end"] = max(scenes[-1]["end"], e)
+        else:
+            scenes.append({"start": s, "end": e, "transition": "cut"})
+
+    cut_path = stem + "_cut.mp4"
+    E.edit_video(data["input_path"], scenes, cut_path)   # out_start/out_end が付く
+
+    # 字幕：残した単語（編集後テキスト）を build_word_cues で読みやすい塊にまとめる
+    wobjs = [SimpleNamespace(start=w["start"], end=w["end"], word=w["text"]) for w in items]
+    subs = E.build_word_cues(wobjs, scenes)
+    for s in subs:
+        s["text"] = clean_caption(s["text"])
+    subs = [s for s in subs if s["text"] and not _FRAG.match(s["text"])]
+    subs = E.dedup_consecutive_subs(subs)
+
+    _finalize(cut_path, subs, data["bgm_mood"], stem, output_path)
+    # 次回の編集画面で状態を復元できるよう保存
+    data["scenes"] = [{"start": s["start"], "end": s["end"], "transition": "cut"} for s in scenes]
+    data["subtitles"] = subs
+    data["word_keep"] = [w["i"] for w in items if "i" in w]
+    data["word_edits"] = {str(w["i"]): w["text"] for w in items
+                          if "i" in w and w.get("text")}
+    _save_data(output_path, data)
+    return output_path
+
+
 def _tighten_scenes(scenes, words, pad=0.12, min_trim=0.25):
     """各シーンの前後の無音を、実際の発話（単語）の範囲まで詰める。
     → 間延びが消えてテンポUP、かつ境界が単語の頭/末尾に揃うので『マがあります』等の単語切れも防げる。

@@ -1,60 +1,69 @@
 {% extends "base.html" %}
-{% block title %}テキスト編集 - MagiClip{% endblock %}
+{% block title %}言葉で編集 - MagiClip{% endblock %}
 {% block content %}
-<h1>テキストで編集 ✨</h1>
-<p class="muted">動画の<b>全文</b>です。<b>✅を付けた場面が動画に入ります</b>（✅＝AIのおすすめ）。
-AIが外した場面も自由に<b>追加</b>でき、不要な場面は<b>外す</b>と映像ごとカットされます。文字の修正もできます。</p>
+<h1>言葉で編集 ✨</h1>
+<p class="muted">MagiClipは<b>言葉を起点に</b>編集します。文字起こしを台本のように直すだけ。
+<b>クリックで単語を消す</b>とその映像もカットされ、<b>ダブルクリックで誤字を直せ</b>ます。
+うすい言葉はAIが外した所＝クリックで足せます。</p>
 
 <div style="display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start">
   <div>
-    <video src="{{ url_for('video', job_id=job.id) }}?v={{ segments|length }}" controls muted playsinline></video>
+    <video src="{{ url_for('video', job_id=job.id) }}?v={{ words|length }}" controls muted playsinline></video>
     <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
-    <div class="center" style="margin-top:8px">
-      <button type="button" class="btn btn-sm btn-ghost" id="onlyAI">AIのおすすめだけに戻す</button>
-    </div>
   </div>
 
   <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
-    <div id="lines">
-      {% for s in segments %}
-      <label class="line {{ 'on' if s.selected else 'off' }}" data-i="{{ loop.index0 }}"
-             style="display:flex;gap:10px;align-items:center;margin:7px 0;cursor:pointer">
-        <input type="checkbox" name="keep_{{ loop.index0 }}" {% if s.selected %}checked{% endif %}
-               class="cb" style="width:auto;flex:none">
-        <span class="muted" style="font-size:12px;min-width:42px">{{ '%.1f'|format(s.start) }}s</span>
-        <input type="text" name="text_{{ loop.index0 }}" value="{{ s.text }}" style="flex:1"
-               onclick="event.stopPropagation()">
-        {% if s.selected %}<span class="tag" style="color:#b9a9ff;flex:none">AI</span>{% endif %}
-      </label>
-      {% endfor %}
+    <input type="hidden" name="words_json" id="words_json">
+    <div id="script" style="line-height:2.1;font-size:17px">
+      {% for w in words %}{% if w.br %}<br>{% endif %}<span class="w {{ 'on' if w.selected else 'off' }}" data-i="{{ w.i }}">{{ w.text }}</span>{% endfor %}
     </div>
-    <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
-    <p class="muted" style="font-size:12px;margin-top:8px">※ 場面（発話のかたまり）単位で選びます。隣り合う場面は自然につながり、離れた場面はカットされます。</p>
+    <button class="btn" type="submit" style="margin-top:18px">この内容で作り直す ✨</button>
+    <p class="muted" style="font-size:12px;margin-top:8px">クリック=消す/戻す ・ ダブルクリック=文字を直す</p>
   </form>
 </div>
 {% endblock %}
 {% block scripts %}
 <style>
-  .line.off{opacity:.5}
-  .line input[type=text]{transition:opacity .15s}
+  .w{cursor:pointer;border-radius:6px;padding:1px 3px;transition:background .1s,opacity .1s;white-space:pre-wrap}
+  .w.on:hover{background:rgba(124,92,255,.25)}
+  .w.off{opacity:.35;text-decoration:line-through}
+  .w.editing{background:#fff;color:#000;outline:2px solid var(--brand)}
 </style>
 <script>
-  function paint(line){
-    const on = line.querySelector('.cb').checked;
-    line.classList.toggle('off', !on);
-    line.classList.toggle('on', on);
-  }
-  document.querySelectorAll('.line').forEach(line => {
-    const cb = line.querySelector('.cb');
-    cb.addEventListener('change', () => paint(line));
-  });
-  // 「AIのおすすめだけに戻す」: AIタグのある行だけON
-  document.getElementById('onlyAI').onclick = () => {
-    document.querySelectorAll('.line').forEach(line => {
-      const isAI = !!line.querySelector('.tag');
-      line.querySelector('.cb').checked = isAI;
-      paint(line);
+  const sc = document.getElementById('script');
+  function paint(el){ el.classList.toggle('off', !el.classList.contains('on')); }
+
+  sc.querySelectorAll('.w').forEach(el => {
+    // クリック=消す/戻す（ダブルクリック編集中は無効）
+    el.addEventListener('click', () => {
+      if (el.isContentEditable) return;
+      el.classList.toggle('on');
+      el.classList.toggle('off', !el.classList.contains('on'));
     });
-  };
+    // ダブルクリック=その単語の文字を直す
+    el.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      el.classList.remove('off'); el.classList.add('on','editing');
+      el.contentEditable = 'true'; el.focus();
+      const r = document.createRange(); r.selectNodeContents(el);
+      const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    });
+    el.addEventListener('blur', () => {
+      el.contentEditable = 'false'; el.classList.remove('editing');
+      el.textContent = el.textContent.trim();
+    });
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); el.blur(); }
+    });
+  });
+
+  // 送信時に各単語の keep / text を JSON 化
+  document.querySelector('form').addEventListener('submit', () => {
+    const out = [];
+    sc.querySelectorAll('.w').forEach(el => {
+      out.push({ i: parseInt(el.dataset.i), keep: el.classList.contains('on'), text: el.textContent.trim() });
+    });
+    document.getElementById('words_json').value = JSON.stringify(out);
+  });
 </script>
 {% endblock %}
