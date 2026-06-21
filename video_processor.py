@@ -11,6 +11,7 @@ AI編集エンジン（差し替え可能な層）。
 import os
 import re
 import json
+import difflib
 import subprocess
 from types import SimpleNamespace
 
@@ -143,8 +144,13 @@ def segment_thumbnail(output_path, idx):
         return None
     thumb = _stem(output_path) + f"_thumb_{idx}.jpg"
     if not os.path.exists(thumb):
-        seg = cleaned[idx]
-        mid = (seg["start"] + seg["end"]) / 2
+        # サムネ時刻も“実単語”の時刻から取る（Whisperのセグメント時刻ズレで別シーンを映さないため）
+        sw = _map_segments_to_words(cleaned, data.get("words", []))[idx] if data.get("words") else []
+        if sw:
+            mid = (sw[0]["start"] + (sw[-1].get("end") or sw[-1]["start"])) / 2
+        else:
+            seg = cleaned[idx]
+            mid = (seg["start"] + seg["end"]) / 2
         subprocess.run(["ffmpeg", "-ss", f"{mid:.2f}", "-i", data["input_path"], "-frames:v", "1",
                         "-vf", "scale=-2:160", "-q:v", "5", thumb, "-y"], capture_output=True)
     return thumb if os.path.exists(thumb) else None
@@ -154,34 +160,73 @@ def _nospace(t):
     return clean_caption(t).replace(" ", "")
 
 
-def _seg_kept_ranges(s, e, edited, words):
-    """1シーン内で「編集後テキストに残っている単語」の時間範囲を返す。
-    文字を削った分だけ映像を短くするための核。誤字修正（長さがほぼ同じ）はカットしない。"""
-    inseg = [w for w in words if w.get("start") is not None and s - 0.05 <= w["start"] < e]
-    orig = _nospace("".join(w["word"] for w in inseg))
-    ed = _nospace(edited)
-    # 元とほぼ同じ長さ＝誤字修正だけ → カットせずシーン全体を残す
-    if not inseg or len(ed) >= len(orig) - 1:
-        return [(s, e)]
-    # 短くなった → 残っている単語だけ時間範囲を拾う（消した単語の所はカット）
-    ranges, pos = [], 0
-    for w in inseg:
-        wt = _nospace(w["word"])
-        if not wt:
+def _map_segments_to_words(cleaned, words):
+    """各cleanedセグメントに対応する“実際の単語”をテキスト整合で割り当てる。
+    Whisperのセグメント時刻は単語時刻とズレることがある（例: 区間13-18sなのに本文は別語）。
+    時刻ではなく本文の並びで対応付けることで、正確な単語時刻で切れるようにする。"""
+    stream, char_word = "", []
+    for wi, w in enumerate(words):
+        t = _nospace(w["word"])
+        stream += t
+        char_word += [wi] * len(t)
+    pos, result = 0, []
+    for seg in cleaned:
+        st = _nospace(seg["text"])
+        if not st:
+            result.append([])
             continue
-        idx = ed.find(wt, pos)
-        if idx != -1:
-            ranges.append([w["start"], w.get("end") or w["start"]])
-            pos = idx + len(wt)
-    if not ranges:
+        # 先頭と末尾を別々にアンカーする（本文に単語側と違う文字が混ざっても行き過ぎない）
+        head = st[:6] if len(st) >= 6 else st
+        tail = st[-6:] if len(st) >= 6 else st
+        hi = stream.find(head, pos)
+        if hi == -1:
+            result.append([])
+            continue
+        ti = stream.find(tail, hi)
+        end = (ti + len(tail)) if ti != -1 else min(hi + len(st), len(char_word))
+        end = min(end, len(char_word))
+        wis = sorted(set(char_word[hi:end]))
+        result.append([words[i] for i in wis])
+        pos = end
+    return result
+
+
+def _kept_ranges(edited, seg_words):
+    """そのセグメントの単語のうち「編集後テキストに残っている単語」の時間範囲を返す。
+    文字を削った分だけ映像を短くするための核。誤字修正（長さがほぼ同じ）はカットしない。"""
+    seg_words = [w for w in seg_words if w.get("start") is not None]
+    if not seg_words:
+        return []
+    s = seg_words[0]["start"]
+    e = seg_words[-1].get("end") or seg_words[-1]["start"]
+    # 単語を連結し、各文字→単語index を持つ
+    orig, char_w = "", []
+    for wi, w in enumerate(seg_words):
+        t = _nospace(w["word"])
+        orig += t
+        char_w += [wi] * len(t)
+    ed = _nospace(edited)
+    # 元とほぼ同じ長さ＝誤字修正だけ → カットせず全体を残す
+    if len(ed) >= len(orig) - 1:
+        return [(s, e)]
+    # difflibで「編集後にも残っている文字＝元のどの単語か」を求める（多少の差異に強い）
+    sm = difflib.SequenceMatcher(None, orig, ed, autojunk=False)
+    kept = set()
+    for blk in sm.get_matching_blocks():
+        for c in range(blk.a, blk.a + blk.size):
+            if c < len(char_w):
+                kept.add(char_w[c])
+    if not kept:
         return [(s, e)]   # 対応が取れない時は安全側で全体を残す
-    merged = [ranges[0]]
-    for a, b in ranges[1:]:
-        if a - merged[-1][1] <= 0.15:        # 隣り合う単語は繋ぐ
-            merged[-1][1] = max(merged[-1][1], b)
+    ranges = []
+    for wi in sorted(kept):
+        a = seg_words[wi]["start"]
+        b = seg_words[wi].get("end") or a
+        if ranges and a - ranges[-1][1] <= 0.15:    # 隣り合う単語は繋ぐ
+            ranges[-1][1] = max(ranges[-1][1], b)
         else:
-            merged.append([a, b])
-    return [(a, b) for a, b in merged]
+            ranges.append([a, b])
+    return [(a, b) for a, b in ranges]
 
 
 def reedit_segments(output_path, kept):
@@ -193,15 +238,19 @@ def reedit_segments(output_path, kept):
         raise RuntimeError("編集データが見つかりません")
     stem = _stem(output_path)
     words = data.get("words", [])
-    items = sorted([s for s in kept if s.get("start") is not None
-                    and clean_caption(s.get("text", ""))], key=lambda x: x["start"])
+    cleaned = data.get("cleaned", [])
+    # cleanedセグメント→実単語をテキスト整合で対応付け（Whisperの時刻ズレに頼らない）
+    seg_words = _map_segments_to_words(cleaned, words)
+    items = [s for s in kept if clean_caption(s.get("text", "")) and 0 <= s.get("i", -1) < len(seg_words)]
+    items = [it for it in items if seg_words[it["i"]]]              # 単語が取れたものだけ
+    items.sort(key=lambda it: seg_words[it["i"]][0]["start"])      # 実単語の時刻順
     if not items:
         raise RuntimeError("残すシーンがありません")
 
     # 各シーンの「残す時間範囲」を編集テキストから割り出す（文字を削った分は範囲から除く＝カット）
-    flat = []   # (start, end, item_index)
+    flat = []   # (start, end, item_index_in_items)
     for k, it in enumerate(items):
-        for a, b in _seg_kept_ranges(float(it["start"]), float(it["end"]), it["text"], words):
+        for a, b in _kept_ranges(it["text"], seg_words[it["i"]]):
             flat.append((a, b, k))
     flat.sort(key=lambda x: x[0])
 
@@ -219,30 +268,39 @@ def reedit_segments(output_path, kept):
 
     E.edit_video(data["input_path"], scenes, stem + "_cut.mp4")   # out_start/out_end が付く
 
-    # 字幕：各シーン(item)の編集テキストを、最初の残存範囲の編集後タイムラインに配置
-    first = {}    # item_index -> (scene_idx, orig_start, orig_end)
+    # 字幕：各シーン(item)の編集テキストを、その残存範囲“全体”の編集後タイムラインに配置する。
+    # 各範囲は必ず自分の所属シーンで時刻変換する（複数シーンにまたがっても出力上は連続なので全尺を覆える）。
+    span = {}    # item_index -> [out_start, out_end]
     for (a, b, k), scn in zip(flat, flat_scene):
-        if k not in first:
-            first[k] = [scn, a, b]
+        sc = scenes[scn]
+        oa = a - sc["start"] + sc["out_start"]
+        ob = b - sc["start"] + sc["out_start"]
+        if k not in span:
+            span[k] = [oa, ob]
         else:
-            first[k][2] = b
+            span[k][0] = min(span[k][0], oa)
+            span[k][1] = max(span[k][1], ob)
     subs = []
     for k, it in enumerate(items):
-        if k not in first:
+        if k not in span:
             continue
-        scn, a, b = first[k]
-        sc = scenes[scn]
-        cs = max(sc["out_start"], min(a - sc["start"] + sc["out_start"], sc["out_end"]))
-        ce = max(cs, min(b - sc["start"] + sc["out_start"], sc["out_end"]))
-        subs.append({"start": cs, "end": ce, "text": clean_caption(it["text"])})
+        s0, e0 = span[k]
+        subs.append({"start": s0, "end": e0, "text": clean_caption(it["text"])})
     subs.sort(key=lambda x: x["start"])
+    # 重なり解消（前を切り詰める）→ 最低表示時間を確保（次にぶつからない範囲で）
     res = []
     for c in subs:
-        if c["end"] <= c["start"]:
-            c["end"] = c["start"] + 0.4
         if res and c["start"] < res[-1]["end"]:
             res[-1]["end"] = c["start"]
         res.append(c)
+    MIN_SHOW = 0.7
+    for i, c in enumerate(res):
+        nxt = res[i + 1]["start"] if i + 1 < len(res) else None
+        c["end"] = max(c["end"], c["start"] + MIN_SHOW)   # 最低表示時間を確保（長い字幕は縮めない）
+        if nxt is not None:
+            c["end"] = min(c["end"], nxt)                 # ただし次の字幕にはぶつけない
+        if c["end"] <= c["start"]:
+            c["end"] = c["start"] + 0.4
     res = E.dedup_consecutive_subs(res)
 
     _finalize(stem + "_cut.mp4", res, data["bgm_mood"], stem, output_path)
