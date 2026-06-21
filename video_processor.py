@@ -205,15 +205,15 @@ def reedit_segments(output_path, kept):
             flat.append((a, b, k))
     flat.sort(key=lambda x: x[0])
 
-    # 連続範囲は1シーンに繋ぎ、離れた所はfade。範囲→出力シーンの対応を記録
+    # 隣接範囲だけ1シーンに繋ぐ。削った単語(隙間あり)は必ず切れるよう閾値はシーン内マージ(0.15)より小さく。
+    # トランジションは入れない＝全てクリーンなカット（fadeの一瞬の不自然さを避ける）。
     scenes, prev_end = [], None
     flat_scene = []
     for a, b, k in flat:
-        if scenes and prev_end is not None and a - prev_end < 0.3:
+        if scenes and prev_end is not None and a - prev_end < 0.12:
             scenes[-1]["end"] = b
         else:
-            trans = "fade" if (prev_end is not None and a - prev_end > 2.0) else "cut"
-            scenes.append({"start": a, "end": b, "transition": trans})
+            scenes.append({"start": a, "end": b, "transition": "cut"})
         flat_scene.append(len(scenes) - 1)
         prev_end = b
 
