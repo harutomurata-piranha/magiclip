@@ -516,6 +516,16 @@ def build_word_cues(words, scenes):
             c["end"] = min(c["start"] + CUE_MIN_SHOW, limit)
     return result
 
+def dedup_consecutive_subs(subs):
+    """連続する重複字幕を間引く（話者の言い直しを校正が同文言にそろえても重複させない）。
+    直前と同じ／直前に含まれる字幕は出さない＝最初の1つだけ残す（時刻は最初の発話に合う）。"""
+    out = []
+    for s in subs:
+        if out and (s["text"] == out[-1]["text"] or s["text"] in out[-1]["text"]):
+            continue
+        out.append(s)
+    return out
+
 def sanitize_caption(text):
     """字幕に紛れ込む校正マーカーや非発話の記号・注記を確実に除去する（多層防御）。
     AI校正が稀に [12] 等のマーカーや（笑）(BGM)等の注記を残しても、SRTには出さない。"""
@@ -778,6 +788,7 @@ def _generate_and_build(job_id):
     # 空・単独かな1文字（シーン境界で割れた助詞などの断片）は字幕に出さない
     _frag = re.compile(r'^[぀-ゟ゠-ヿ]$')
     subtitles = [s for s in subtitles if s["text"] and not _frag.match(s["text"])]
+    subtitles = dedup_consecutive_subs(subtitles)   # 校正後の連続重複も除去
     create_srt(subtitles, srt_path)
 
     job["progress"] = 88

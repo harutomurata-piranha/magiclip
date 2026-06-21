@@ -52,7 +52,8 @@ def _build_subtitles(words, scenes, cleaned):
     subs = E.correct_segments(cues, reference=reference)
     for s in subs:
         s["text"] = E.strip_punct(E.sanitize_caption(s["text"]))
-    return [s for s in subs if s["text"] and not _FRAG.match(s["text"])]
+    subs = [s for s in subs if s["text"] and not _FRAG.match(s["text"])]
+    return E.dedup_consecutive_subs(subs)   # 校正後の連続重複も除去
 
 
 def _finalize(cut_path, subtitles, bgm_mood, stem, output_path):
