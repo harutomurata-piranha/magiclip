@@ -3,7 +3,7 @@
 {% block content %}
 <h1>AIの編集を直す ✨</h1>
 <p class="muted">AIが選んだシーン（✅）と選ばなかったシーンを、字幕とサムネイルで一覧表示しています。
-<b>チェックで採用/カット</b>、<b>字幕の文字を直すと字幕が直り、文字を消す（空に）とそのシーンはカット</b>されます。</p>
+<b>チェックで採用/カット</b>、<b>字幕の文字を直すと字幕が直り、文字を消した分だけ映像も短くなります</b>（行を空にすればそのシーンごとカット）。</p>
 
 <div style="display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start">
   <div>
@@ -26,7 +26,7 @@
       {% endfor %}
     </div>
     <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
-    <p class="muted" style="font-size:12px;margin-top:8px">チェックON＝採用 ・ 文字を直す＝字幕修正 ・ チェックを外す/文字を空に＝そのシーンをカット</p>
+    <p class="muted" style="font-size:12px;margin-top:8px">チェックON＝採用 ・ 文字を直す＝字幕修正 ・ 文字を一部消す＝その分だけ映像も短く ・ チェックを外す/文字を空に＝シーンごとカット</p>
   </form>
 </div>
 {% endblock %}

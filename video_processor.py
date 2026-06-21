@@ -150,39 +150,90 @@ def segment_thumbnail(output_path, idx):
     return thumb if os.path.exists(thumb) else None
 
 
+def _nospace(t):
+    return clean_caption(t).replace(" ", "")
+
+
+def _seg_kept_ranges(s, e, edited, words):
+    """1シーン内で「編集後テキストに残っている単語」の時間範囲を返す。
+    文字を削った分だけ映像を短くするための核。誤字修正（長さがほぼ同じ）はカットしない。"""
+    inseg = [w for w in words if w.get("start") is not None and s - 0.05 <= w["start"] < e]
+    orig = _nospace("".join(w["word"] for w in inseg))
+    ed = _nospace(edited)
+    # 元とほぼ同じ長さ＝誤字修正だけ → カットせずシーン全体を残す
+    if not inseg or len(ed) >= len(orig) - 1:
+        return [(s, e)]
+    # 短くなった → 残っている単語だけ時間範囲を拾う（消した単語の所はカット）
+    ranges, pos = [], 0
+    for w in inseg:
+        wt = _nospace(w["word"])
+        if not wt:
+            continue
+        idx = ed.find(wt, pos)
+        if idx != -1:
+            ranges.append([w["start"], w.get("end") or w["start"]])
+            pos = idx + len(wt)
+    if not ranges:
+        return [(s, e)]   # 対応が取れない時は安全側で全体を残す
+    merged = [ranges[0]]
+    for a, b in ranges[1:]:
+        if a - merged[-1][1] <= 0.15:        # 隣り合う単語は繋ぐ
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(a, b) for a, b in merged]
+
+
 def reedit_segments(output_path, kept):
-    """シーン単位の再編集：選んだシーン（＋編集テキスト）で映像を切り直し、各シーンを字幕にする。
-    kept = [{"i","text","start","end"}]（選んだシーンのみ）。
-    『シーンを外す/文字を消す＝その映像もカット／文字を直す＝字幕も直る』を実現する。"""
+    """シーン単位の再編集（言葉起点）。選んだシーン＋編集テキストで映像を切り直す。
+    kept = [{"i","text","start","end"}]。
+    『シーンを外す＝その映像をカット／文字を一部消す＝その単語ぶんの映像も短くなる／文字を直す＝字幕も直る』。"""
     data = load_edit_data(output_path)
     if not data:
         raise RuntimeError("編集データが見つかりません")
     stem = _stem(output_path)
+    words = data.get("words", [])
     items = sorted([s for s in kept if s.get("start") is not None
                     and clean_caption(s.get("text", ""))], key=lambda x: x["start"])
     if not items:
         raise RuntimeError("残すシーンがありません")
 
-    # 連続シーンは1つに繋ぎ、離れた所はfadeでつなぐ。各シーンが属する出力シーンを記録
-    scenes, seg_scene, prev_end = [], [], None
-    for it in items:
-        s, e = float(it["start"]), float(it["end"])
-        if scenes and prev_end is not None and s - prev_end < 0.3:
-            scenes[-1]["end"] = e
+    # 各シーンの「残す時間範囲」を編集テキストから割り出す（文字を削った分は範囲から除く＝カット）
+    flat = []   # (start, end, item_index)
+    for k, it in enumerate(items):
+        for a, b in _seg_kept_ranges(float(it["start"]), float(it["end"]), it["text"], words):
+            flat.append((a, b, k))
+    flat.sort(key=lambda x: x[0])
+
+    # 連続範囲は1シーンに繋ぎ、離れた所はfade。範囲→出力シーンの対応を記録
+    scenes, prev_end = [], None
+    flat_scene = []
+    for a, b, k in flat:
+        if scenes and prev_end is not None and a - prev_end < 0.3:
+            scenes[-1]["end"] = b
         else:
-            trans = "fade" if (prev_end is not None and s - prev_end > 2.0) else "cut"
-            scenes.append({"start": s, "end": e, "transition": trans})
-        seg_scene.append(len(scenes) - 1)
-        prev_end = e
+            trans = "fade" if (prev_end is not None and a - prev_end > 2.0) else "cut"
+            scenes.append({"start": a, "end": b, "transition": trans})
+        flat_scene.append(len(scenes) - 1)
+        prev_end = b
 
     E.edit_video(data["input_path"], scenes, stem + "_cut.mp4")   # out_start/out_end が付く
 
-    # 字幕：選んだ各シーンを、所属シーンの編集後タイムラインに配置（編集テキストを使用）
+    # 字幕：各シーン(item)の編集テキストを、最初の残存範囲の編集後タイムラインに配置
+    first = {}    # item_index -> (scene_idx, orig_start, orig_end)
+    for (a, b, k), scn in zip(flat, flat_scene):
+        if k not in first:
+            first[k] = [scn, a, b]
+        else:
+            first[k][2] = b
     subs = []
-    for it, scn in zip(items, seg_scene):
+    for k, it in enumerate(items):
+        if k not in first:
+            continue
+        scn, a, b = first[k]
         sc = scenes[scn]
-        cs = max(sc["out_start"], min(it["start"] - sc["start"] + sc["out_start"], sc["out_end"]))
-        ce = max(cs, min(it["end"] - sc["start"] + sc["out_start"], sc["out_end"]))
+        cs = max(sc["out_start"], min(a - sc["start"] + sc["out_start"], sc["out_end"]))
+        ce = max(cs, min(b - sc["start"] + sc["out_start"], sc["out_end"]))
         subs.append({"start": cs, "end": ce, "text": clean_caption(it["text"])})
     subs.sort(key=lambda x: x["start"])
     res = []
