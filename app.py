@@ -135,8 +135,8 @@ def _annotate_segments(cleaned_segments):
 
 JSON_SPEC = '{"bgm_mood": "動画に合うBGMのムード", "scenes": [{"start": 開始秒, "end": 終了秒, "reason": "選んだ理由", "transition": "cut または fade"}]}'
 
-# 構成（シーン判定）は最高性能モデルで文脈理解させる（品質最優先・コスト度外視）
-STRUCTURE_MODEL = "claude-opus-4-8"
+# 構成（シーン判定）・分析は Sonnet で文脈理解（コストと品質のバランス）
+STRUCTURE_MODEL = "claude-sonnet-4-6"
 
 def _shared_rules(duration):
     return f"""【編集の考え方（プロの編集）】
@@ -371,7 +371,7 @@ def correct_segments(segments, reference=""):
                  if reference else "")
     try:
         message = anthropic_client.messages.create(
-            model=STRUCTURE_MODEL,   # 字幕の誤字訂正も最高性能モデルで（品質最優先）
+            model="claude-haiku-4-5-20251001",   # 字幕の誤字訂正・簡潔化は軽量モデルで（コスト削減）
             max_tokens=2000,
             messages=[{"role": "user", "content": f"""
 以下は動画の音声を自動認識した日本語字幕です。各行の [i] 番号はそのまま残し、テキストを「読みやすい字幕」に整えてください。
