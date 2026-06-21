@@ -417,16 +417,25 @@ def correct_segments(segments, reference=""):
     for i, seg in enumerate(segments):
         orig = seg["text"].strip()
         new = parsed.get(i, "").strip()
-        # ★安全網：校正結果が元と大きく食い違ったら（別の行に化けた・幻字幕）元を採用してズレを防ぐ
+        # ★安全網1：元と大きく食い違ったら（別の行に化けた・幻字幕）元を採用＝ズレ防止
         if not new or difflib.SequenceMatcher(None, orig, new).ratio() < CORRECT_MIN_RATIO:
+            new = orig
+        # ★安全網2：文字数が増えたら（＝行の結合・語の追加）元を採用。校正は短くなるはずで、増えるのは異常
+        elif len(new.replace(" ", "")) > len(orig.replace(" ", "")) + 4:
             new = orig
         corrected.append({"start": seg["start"], "end": seg["end"], "text": new,
                           "orig_start": seg.get("orig_start"), "orig_end": seg.get("orig_end")})
     return corrected
 
-PAUSE_SPLIT = 0.4    # 単語間がこれ以上空いたら「話の区切り」→字幕を分ける（音声と同期させる肝）
-CUE_MAX_DUR = 8.0    # 1キューの最大表示秒数（暴走防止の安全網。通常は"間"で切れる）
-CUE_HARD_CHARS = 40  # 1キューの最大文字数（暴走防止の安全網。通常はここまで来ない）
+PAUSE_SPLIT = 0.4     # 単語間がこれ以上空いたら「話の区切り」→字幕を分ける（音声と同期させる肝）
+CUE_MAX_DUR = 8.0     # 1キューの最大表示秒数（暴走防止の安全網）
+CUE_SOFT_CHARS = 14   # この長さを超えたら、次の"自然な区切り"（助詞・文末）で切る → 短く読みやすく
+CUE_HARD_CHARS = 30   # それでも切れない時の強制上限（暴走防止）
+CUE_MIN_SHOW = 0.7    # 1キューの最低表示秒数（一瞬で消えないように）
+# キューを切ってよいのは"文末系"だけにする（句読点＋終助詞ね/よ/わ）。
+# が/を/に/は/も 等の格助詞で切ると述語が次行に孤立する（「ファミマが」｜「あります」）ため使わない。
+# と/の/て/で 等は語の途中(という・ところ・やって・ので…)に出るため使わない。
+_NATURAL_BREAK = set("、。！？ねよわ")
 
 def build_word_cues(words, scenes):
     """原音声の単語タイムスタンプを編集後タイムラインへマッピングして字幕を作る。
@@ -465,9 +474,13 @@ def build_word_cues(words, scenes):
             cur += token
             c_end = max(we, c_start)
             prev_end = we
-            # 文末、または安全網（長すぎ）で確定。文の途中（文字数）では切らない＝音声より先に進ませない
+            last = cur.rstrip("　 ")[-1:]
+            # 確定タイミング：文末／長すぎ(安全網)／ソフト上限を超えて"自然な区切り(助詞・句読点)"に来た
+            # ※区切りは必ず助詞・文末＝語の途中では切らない（読みやすさ）。文字数だけでは切らない（同期維持）
             if (token.rstrip().endswith(("。", "．", "！", "？", "!", "?"))
-                    or (c_end - c_start) >= CUE_MAX_DUR or len(cur) >= CUE_HARD_CHARS):
+                    or (c_end - c_start) >= CUE_MAX_DUR
+                    or len(cur) >= CUE_HARD_CHARS
+                    or (len(cur) >= CUE_SOFT_CHARS and last in _NATURAL_BREAK)):
                 emit()
         emit()
 
@@ -476,9 +489,23 @@ def build_word_cues(words, scenes):
     for c in cues:
         if c["end"] <= c["start"]:
             c["end"] = c["start"] + 0.4
+        # 連続する言い直し・重複を間引く（読みやすさ）：直前と同じ/直前に含まれるなら出さない。
+        # 直前が今回に含まれる短い言い直し（例「六方会館」→「六方会館ですね」）は今回で置き換える。
+        if result:
+            prev = result[-1]["text"]
+            if c["text"] == prev or c["text"] in prev:
+                continue
+            if prev in c["text"] and len(prev) <= 8:
+                result[-1] = c
+                continue
         if result and c["start"] < result[-1]["end"]:
             result[-1]["end"] = c["start"]   # 重なり解消（同時に2つ表示しない）
         result.append(c)
+    # 最低表示時間を確保（次の字幕の開始は侵さない範囲で延長）→ 一瞬で消えるのを防ぐ
+    for i, c in enumerate(result):
+        limit = result[i + 1]["start"] if i + 1 < len(result) else c["end"] + CUE_MIN_SHOW
+        if c["end"] - c["start"] < CUE_MIN_SHOW:
+            c["end"] = min(c["start"] + CUE_MIN_SHOW, limit)
     return result
 
 def sanitize_caption(text):
@@ -492,6 +519,7 @@ def sanitize_caption(text):
     text = re.sub(r'[\[\]【】]', ' ', text)              # はみ出した括弧の残り
     text = re.sub(r'[♪♫♬◆◇■□*※→←]', ' ', text)        # 音符・装飾記号
     text = re.sub(r'^[\s、。,.\-‐－—–…・:：;；]+', '', text)  # 行頭の接続記号・約物
+    text = re.sub(r'^(と|で)[\s、。,]+', '', text)       # 行頭に浮く接続詞「と/で」（直後が空白/読点＝単独の繋ぎ語）を除去
     return ' '.join(text.split())
 
 def strip_punct(text):
@@ -534,17 +562,30 @@ def wrap_text(text, font, max_width, draw):
             continue
         score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える）
         prev, nxt = text[i - 1], text[i]
-        if prev in "、。！？":
-            score -= 8                     # 句読点の直後は最優先で改行
+        def _kata(c): return "゠" <= c <= "ヿ"
+        def _kanji(c): return "一" <= c <= "鿿"
+        if prev == " " or nxt == " ":
+            score -= 20                    # 空白（＝こちらが入れた自然な区切り）で切るのを最優先
+        elif prev in "、。！？":
+            score -= 8                     # 句読点の直後
         elif prev in _BREAK_AFTER:
             score -= 4                     # 助詞の直後も自然
-        if nxt in _BAD_LINE_HEAD:
-            score += 8                     # 行頭に句読点・小書き文字が来るのは避ける
+        def _hira(c): return "ぁ" <= c <= "ゟ"
+        if _kata(prev) and _kata(nxt):
+            score += 15                    # カタカナ語の途中で割らない（ラファエッ｜ト を防ぐ）
+        elif _kanji(prev) and _kanji(nxt):
+            score += 5                     # 漢字熟語の途中も避ける
+        elif _hira(prev) and _hira(nxt) and prev not in "ねよわ":
+            score += 10                    # ひらがな語の途中も避ける（と｜ころ＝ところ を防ぐ）。漢字/カナの語頭で切る方が自然
+        if nxt in _BAD_LINE_HEAD or prev in "ーっ":
+            score += 8                     # 行頭に小書き等／長音・促音の直後で切るのは避ける（語中切れ防止）
+        if len(text[i:].strip()) <= 2 or len(text[:i].strip()) <= 1:
+            score += 6                     # 片方が極端に短い改行は避ける（孤立防止）
         if best is None or score < best[0]:
             best = (score, i)
     if best:
         i = best[1]
-        return [text[:i], text[i:]]
+        return [text[:i].strip(), text[i:].strip()]   # 区切りが空白なら前後の空白を除く
 
     # 2行で収まらない長文は機械的に折り返す（通常は起きない）
     lines, cur = [], ""
@@ -562,7 +603,7 @@ def render_subtitle_png(text, w, h, path):
     """字幕1枚を透過PNGとして描画（下部中央・白文字＋黒フチ）"""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font_size = 46
+    font_size = 52   # ショート向けに大きめ（短いキューと合わせて読みやすく）
     try:
         font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
     except:
