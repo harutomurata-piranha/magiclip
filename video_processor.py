@@ -11,6 +11,7 @@ AI編集エンジン（差し替え可能な層）。
 import os
 import re
 import json
+import subprocess
 from types import SimpleNamespace
 
 import app as E  # 既存の本物エンジン（関数を再利用。__main__ガードがあるのでサーバは起動しない）
@@ -94,27 +95,112 @@ def clean_caption(t):
     return E.strip_punct(E.sanitize_caption(t or ""))
 
 
+def editor_text(t):
+    """編集画面の初期テキスト用：clean_caption に加え、区切られたフィラー語だけ安全に除去する
+    （語の途中は壊さない＝空白で分かれた『はい』『えーと』等のトークンのみ落とす）。"""
+    toks = [w for w in clean_caption(t).split(" ") if w and w not in E.FILLER_TOKENS]
+    return " ".join(toks)
+
+
 def list_segments(output_path):
-    """プロ編集画面用：動画の“全文”（全セグメント）を返す。
-    AIが採用した区間には selected=True を付ける（=おすすめに✅）。
-    ユーザーはここから、AIが選ばなかった部分も含めて自由に取捨選択できる。
+    """プロ編集画面用：動画の“全文”（全セグメント＝シーン候補）を返す。
+    各シーン: {i, start, end, text(編集可), selected(AI採用=ON)}。
+    AIが選ばなかったシーンも含めて全部返す（ユーザーが取捨選択・編集できる）。
+    前回の編集(seg_keep / seg_edits)があれば復元する。
     """
     data = load_edit_data(output_path)
     if not data:
         return []
+    cleaned = data.get("cleaned", [])
     ai = [(sc["start"], sc["end"]) for sc in data.get("scenes", [])]
+    keep = data.get("seg_keep")
+    edits = data.get("seg_edits", {})
+    if keep is not None and any(int(k) >= len(cleaned) for k in keep):
+        keep, edits = None, {}      # 不整合な保存データは無視
 
     def in_ai(s, e):
         return any(s < ae and e > a_s for a_s, ae in ai)
 
-    segs = []
-    for seg in data.get("cleaned", []):
-        segs.append({
+    out = []
+    for i, seg in enumerate(cleaned):
+        sel = (i in keep) if keep is not None else in_ai(seg["start"], seg["end"])
+        out.append({
+            "i": i,
             "start": seg["start"], "end": seg["end"],
-            "text": clean_caption(seg["text"]),
-            "selected": in_ai(seg["start"], seg["end"]),
+            "text": edits.get(str(i), editor_text(seg["text"])),
+            "selected": sel,
         })
-    return segs
+    return out
+
+
+def segment_thumbnail(output_path, idx):
+    """シーン候補のサムネイル（区間の中間フレーム）を元動画から作って返す（無ければ生成）。"""
+    data = load_edit_data(output_path)
+    if not data:
+        return None
+    cleaned = data.get("cleaned", [])
+    if idx < 0 or idx >= len(cleaned):
+        return None
+    thumb = _stem(output_path) + f"_thumb_{idx}.jpg"
+    if not os.path.exists(thumb):
+        seg = cleaned[idx]
+        mid = (seg["start"] + seg["end"]) / 2
+        subprocess.run(["ffmpeg", "-ss", f"{mid:.2f}", "-i", data["input_path"], "-frames:v", "1",
+                        "-vf", "scale=-2:160", "-q:v", "5", thumb, "-y"], capture_output=True)
+    return thumb if os.path.exists(thumb) else None
+
+
+def reedit_segments(output_path, kept):
+    """シーン単位の再編集：選んだシーン（＋編集テキスト）で映像を切り直し、各シーンを字幕にする。
+    kept = [{"i","text","start","end"}]（選んだシーンのみ）。
+    『シーンを外す/文字を消す＝その映像もカット／文字を直す＝字幕も直る』を実現する。"""
+    data = load_edit_data(output_path)
+    if not data:
+        raise RuntimeError("編集データが見つかりません")
+    stem = _stem(output_path)
+    items = sorted([s for s in kept if s.get("start") is not None
+                    and clean_caption(s.get("text", ""))], key=lambda x: x["start"])
+    if not items:
+        raise RuntimeError("残すシーンがありません")
+
+    # 連続シーンは1つに繋ぎ、離れた所はfadeでつなぐ。各シーンが属する出力シーンを記録
+    scenes, seg_scene, prev_end = [], [], None
+    for it in items:
+        s, e = float(it["start"]), float(it["end"])
+        if scenes and prev_end is not None and s - prev_end < 0.3:
+            scenes[-1]["end"] = e
+        else:
+            trans = "fade" if (prev_end is not None and s - prev_end > 2.0) else "cut"
+            scenes.append({"start": s, "end": e, "transition": trans})
+        seg_scene.append(len(scenes) - 1)
+        prev_end = e
+
+    E.edit_video(data["input_path"], scenes, stem + "_cut.mp4")   # out_start/out_end が付く
+
+    # 字幕：選んだ各シーンを、所属シーンの編集後タイムラインに配置（編集テキストを使用）
+    subs = []
+    for it, scn in zip(items, seg_scene):
+        sc = scenes[scn]
+        cs = max(sc["out_start"], min(it["start"] - sc["start"] + sc["out_start"], sc["out_end"]))
+        ce = max(cs, min(it["end"] - sc["start"] + sc["out_start"], sc["out_end"]))
+        subs.append({"start": cs, "end": ce, "text": clean_caption(it["text"])})
+    subs.sort(key=lambda x: x["start"])
+    res = []
+    for c in subs:
+        if c["end"] <= c["start"]:
+            c["end"] = c["start"] + 0.4
+        if res and c["start"] < res[-1]["end"]:
+            res[-1]["end"] = c["start"]
+        res.append(c)
+    res = E.dedup_consecutive_subs(res)
+
+    _finalize(stem + "_cut.mp4", res, data["bgm_mood"], stem, output_path)
+    data["scenes"] = [{"start": s["start"], "end": s["end"], "transition": s.get("transition", "cut")} for s in scenes]
+    data["subtitles"] = res
+    data["seg_keep"] = [it["i"] for it in items if "i" in it]
+    data["seg_edits"] = {str(it["i"]): it["text"] for it in items if "i" in it and it.get("text")}
+    _save_data(output_path, data)
+    return output_path
 
 
 def words_of(data):

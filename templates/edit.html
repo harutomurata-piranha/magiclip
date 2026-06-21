@@ -1,69 +1,78 @@
 {% extends "base.html" %}
-{% block title %}言葉で編集 - MagiClip{% endblock %}
+{% block title %}シーンを編集 - MagiClip{% endblock %}
 {% block content %}
-<h1>言葉で編集 ✨</h1>
-<p class="muted">MagiClipは<b>言葉を起点に</b>編集します。文字起こしを台本のように直すだけ。
-<b>クリックで単語を消す</b>とその映像もカットされ、<b>ダブルクリックで誤字を直せ</b>ます。
-うすい言葉はAIが外した所＝クリックで足せます。</p>
+<h1>AIの編集を直す ✨</h1>
+<p class="muted">AIが選んだシーン（✅）と選ばなかったシーンを、字幕とサムネイルで一覧表示しています。
+<b>チェックで採用/カット</b>、<b>字幕の文字を直すと字幕が直り、文字を消す（空に）とそのシーンはカット</b>されます。</p>
 
-<div style="display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start">
+<div style="display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start">
   <div>
-    <video src="{{ url_for('video', job_id=job.id) }}?v={{ words|length }}" controls muted playsinline></video>
+    <video src="{{ url_for('video', job_id=job.id) }}?v={{ scenes|length }}" controls muted playsinline></video>
     <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
   </div>
 
   <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
-    <input type="hidden" name="words_json" id="words_json">
-    <div id="script" style="line-height:2.1;font-size:17px">
-      {% for w in words %}{% if w.br %}<br>{% endif %}<span class="w {{ 'on' if w.selected else 'off' }}" data-i="{{ w.i }}">{{ w.text }}</span>{% endfor %}
+    <input type="hidden" name="scenes_json" id="scenes_json">
+    <div class="scene-list" id="sceneList">
+      {% for s in scenes %}
+      <div class="scene-row {{ 'on' if s.selected else '' }}" data-i="{{ s.i }}">
+        <input type="checkbox" class="cb" {% if s.selected %}checked{% endif %}>
+        <img class="thumb" loading="lazy" src="{{ url_for('thumb', job_id=job.id, idx=s.i) }}" alt="">
+        <div class="meta">
+          <div class="t">{{ '%.1f'|format(s.start) }}–{{ '%.1f'|format(s.end) }}s {% if s.selected %}<span class="aitag">AI</span>{% endif %}</div>
+          <textarea class="stxt" rows="2">{{ s.text }}</textarea>
+        </div>
+      </div>
+      {% endfor %}
     </div>
-    <button class="btn" type="submit" style="margin-top:18px">この内容で作り直す ✨</button>
-    <p class="muted" style="font-size:12px;margin-top:8px">クリック=消す/戻す ・ ダブルクリック=文字を直す</p>
+    <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
+    <p class="muted" style="font-size:12px;margin-top:8px">チェックON＝採用 ・ 文字を直す＝字幕修正 ・ チェックを外す/文字を空に＝そのシーンをカット</p>
   </form>
 </div>
 {% endblock %}
 {% block scripts %}
 <style>
-  .w{cursor:pointer;border-radius:6px;padding:1px 3px;transition:background .1s,opacity .1s;white-space:pre-wrap}
-  .w.on:hover{background:rgba(124,92,255,.25)}
-  .w.off{opacity:.35;text-decoration:line-through}
-  .w.editing{background:#fff;color:#000;outline:2px solid var(--brand)}
+  .scene-list{max-height:70vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px}
+  .scene-row{display:flex;gap:10px;padding:10px 8px;border-radius:10px;align-items:flex-start;border-bottom:1px solid var(--line)}
+  .scene-row:last-child{border-bottom:0}
+  .scene-row.on{background:rgba(124,92,255,.10)}
+  .scene-row .cb{margin-top:4px;width:18px;height:18px;flex:none;accent-color:var(--brand)}
+  .scene-row .thumb{width:74px;height:128px;flex:none;border-radius:8px;object-fit:cover;background:#000}
+  .scene-row .meta{flex:1;min-width:0}
+  .scene-row .t{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;margin-bottom:5px}
+  .scene-row .aitag{color:#b9a9ff;border:1px solid #b9a9ff55;border-radius:6px;padding:0 6px;font-size:10px;margin-left:4px}
+  .scene-row .stxt{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
+                   border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;line-height:1.5;resize:vertical}
+  .scene-row .stxt:focus{outline:none;border-color:var(--brand)}
+  .scene-row.off{opacity:.5}
 </style>
 <script>
-  const sc = document.getElementById('script');
-  function paint(el){ el.classList.toggle('off', !el.classList.contains('on')); }
-
-  sc.querySelectorAll('.w').forEach(el => {
-    // クリック=消す/戻す（ダブルクリック編集中は無効）
-    el.addEventListener('click', () => {
-      if (el.isContentEditable) return;
-      el.classList.toggle('on');
-      el.classList.toggle('off', !el.classList.contains('on'));
+  const list = document.getElementById('sceneList');
+  function paint(row){
+    const on = row.querySelector('.cb').checked;
+    row.classList.toggle('on', on);
+    row.classList.toggle('off', !on);
+  }
+  list.querySelectorAll('.scene-row').forEach(row => {
+    const cb = row.querySelector('.cb');
+    const txt = row.querySelector('.stxt');
+    cb.addEventListener('change', () => paint(row));
+    // 文字を空にしたら自動でカット（チェックを外す）、入れ直したら採用に戻す
+    txt.addEventListener('input', () => {
+      if (!txt.value.trim()) { cb.checked = false; }
+      else if (!cb.checked && document.activeElement === txt) { cb.checked = true; }
+      paint(row);
     });
-    // ダブルクリック=その単語の文字を直す
-    el.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      el.classList.remove('off'); el.classList.add('on','editing');
-      el.contentEditable = 'true'; el.focus();
-      const r = document.createRange(); r.selectNodeContents(el);
-      const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
-    });
-    el.addEventListener('blur', () => {
-      el.contentEditable = 'false'; el.classList.remove('editing');
-      el.textContent = el.textContent.trim();
-    });
-    el.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') { ev.preventDefault(); el.blur(); }
-    });
+    paint(row);
   });
-
-  // 送信時に各単語の keep / text を JSON 化
   document.querySelector('form').addEventListener('submit', () => {
     const out = [];
-    sc.querySelectorAll('.w').forEach(el => {
-      out.push({ i: parseInt(el.dataset.i), keep: el.classList.contains('on'), text: el.textContent.trim() });
+    list.querySelectorAll('.scene-row').forEach(row => {
+      out.push({ i: parseInt(row.dataset.i),
+                 keep: row.querySelector('.cb').checked,
+                 text: row.querySelector('.stxt').value.trim() });
     });
-    document.getElementById('words_json').value = JSON.stringify(out);
+    document.getElementById('scenes_json').value = JSON.stringify(out);
   });
 </script>
 {% endblock %}

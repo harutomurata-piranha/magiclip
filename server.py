@@ -19,7 +19,8 @@ from werkzeug.utils import secure_filename
 
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
-from video_processor import process_video, load_edit_data, list_words, reedit_words
+from video_processor import (process_video, load_edit_data,
+                             list_segments, reedit_segments, segment_thumbnail)
 
 
 def _friendly_error(e):
@@ -341,32 +342,31 @@ def create_app():
         return send_file(job.output_path, as_attachment=True,
                          download_name=f"magiclip_{job_id}.mp4")
 
-    # ---------------- プロ編集（言葉起点：単語を消すと映像も短くなる）----------------
+    # ---------------- プロ編集（AIの編集をシーン一覧で修正：サムネ＋字幕）----------------
     @app.route("/edit/<job_id>", methods=["GET", "POST"])
     @login_required
     def edit(job_id):
         job = _owned_job(job_id)
-        words = list_words(job.output_path) if job.output_path else []
-        if not words:
+        scenes = list_segments(job.output_path) if job.output_path else []
+        if not scenes:
             flash("この動画には編集データがありません。", "error")
             return redirect(url_for("result", job_id=job_id))
 
         if request.method == "POST":
-            # 単語チップの編集結果(JSON)を受け取る：残した単語(keep)＋直したテキスト。
-            # 残した単語の映像だけが繋がる＝文字を消すとカットも短くなる。
+            # 各シーンの編集結果(JSON)：選択(keep)＋編集テキスト。選んだシーンの映像だけが残る。
             try:
-                edited = json.loads(request.form.get("words_json", "[]"))
+                edited = json.loads(request.form.get("scenes_json", "[]"))
             except ValueError:
                 edited = []
-            by_i = {w["i"]: w for w in words}
+            by_i = {s["i"]: s for s in scenes}
             kept = []
-            for w in edited:
-                if w.get("keep") and w.get("i") in by_i:
-                    src = by_i[w["i"]]
-                    kept.append({"i": w["i"], "text": (w.get("text") or src["text"]),
+            for s in edited:
+                if s.get("keep") and s.get("i") in by_i and (s.get("text") or "").strip():
+                    src = by_i[s["i"]]
+                    kept.append({"i": s["i"], "text": s.get("text", ""),
                                  "start": src["start"], "end": src["end"]})
             if not kept:
-                flash("少なくとも1つの言葉を残してください。", "error")
+                flash("少なくとも1つのシーンを残してください（チェック＆文字あり）。", "error")
                 return redirect(url_for("edit", job_id=job_id))
             job.status = "処理中"
             db.session.commit()
@@ -374,16 +374,25 @@ def create_app():
                              daemon=True).start()
             return redirect(url_for("processing", job_id=job_id))
 
-        return render_template("edit.html", job=job, words=words)
+        return render_template("edit.html", job=job, scenes=scenes)
 
-    def _run_reedit(flask_app, job_id, output_path, kept_words):
+    @app.route("/thumb/<job_id>/<int:idx>")
+    @login_required
+    def thumb(job_id, idx):
+        job = _owned_job(job_id)
+        path = segment_thumbnail(job.output_path, idx) if job.output_path else None
+        if not path or not os.path.exists(path):
+            abort(404)
+        return send_file(path, mimetype="image/jpeg")
+
+    def _run_reedit(flask_app, job_id, output_path, kept_scenes):
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
             job.error = None
             db.session.commit()
             try:
-                reedit_words(output_path, kept_words)
+                reedit_segments(output_path, kept_scenes)
                 job.status = "完成"
             except Exception as e:
                 job.status = "エラー"
