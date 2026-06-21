@@ -162,17 +162,19 @@ def _shared_rules(duration):
 - bgm_mood は動画全体に合うムードを1つ。transition は基本"cut"、話題が大きく変わる所だけ"fade\""""
 
 def _structure_json(prompt, retries=2):
-    """構成生成の1コール。失敗時はリトライし、有効な scenes 付き JSON文字列を返す（無ければ None）。"""
+    """構成生成の1コール。APIエラーは握りつぶさず伝播させる（黙って劣化版を出さないため）。
+    出力JSONが壊れている場合だけリトライし、最終的に有効な scenes 付きJSONを返す（無ければ None）。"""
     for _ in range(retries + 1):
+        # API呼び出しの失敗（残高不足・認証・通信など）はそのまま例外として上へ伝える
+        msg = anthropic_client.messages.create(
+            model=STRUCTURE_MODEL, max_tokens=2500,
+            messages=[{"role": "user", "content": prompt}])
+        txt = msg.content[0].text.replace("```json", "").replace("```", "").strip()
         try:
-            msg = anthropic_client.messages.create(
-                model=STRUCTURE_MODEL, max_tokens=2500,
-                messages=[{"role": "user", "content": prompt}])
-            txt = msg.content[0].text.replace("```json", "").replace("```", "").strip()
             if json.loads(txt).get("scenes"):
                 return txt
         except Exception:
-            continue
+            continue   # 出力が壊れている → リトライ
     return None
 
 def analyze_content(annotated, duration):

@@ -8,6 +8,7 @@ import os
 import uuid
 import threading
 
+import app as engine          # AI編集エンジン（ヘルスチェックでクライアントを使う）
 import stripe
 from flask import (Flask, render_template, request, redirect, url_for, flash,
                    jsonify, send_file, abort)
@@ -18,6 +19,20 @@ from werkzeug.utils import secure_filename
 from config import config
 from models import db, User, Job, Payment, PLAN_PAYG, PLAN_MONTHLY
 from video_processor import process_video, reedit_textbased, load_edit_data, list_segments
+
+
+def _friendly_error(e):
+    """例外を、ユーザーに見せる分かりやすい日本語に変換する。"""
+    s = str(e).lower()
+    if "credit balance" in s or "billing" in s:
+        return "AIの利用クレジットが不足しています。少し時間をおくか、管理者にご連絡ください。"
+    if "rate_limit" in s or "overloaded" in s or "429" in s or "529" in s:
+        return "AIが混み合っています。少し時間をおいて、もう一度お試しください。"
+    if "authentication" in s or "api key" in s or "401" in s:
+        return "AIの認証に失敗しました。設定をご確認ください（管理者向け）。"
+    if "編集構成を作れません" in str(e):
+        return "この動画から編集を作れませんでした（短すぎる/無音、またはAIの一時的な不調の可能性）。別の動画でお試しください。"
+    return "編集に失敗しました。もう一度お試しください。"
 
 
 def create_app():
@@ -52,6 +67,17 @@ def create_app():
     @app.route("/")
     def index():
         return render_template("index.html")
+
+    # ---------------- ヘルスチェック（AIが使える状態かを確認）----------------
+    @app.route("/health")
+    def health():
+        try:
+            engine.anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001", max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}])
+            return jsonify({"ok": True, "detail": "AI接続OK（クレジット有効）"})
+        except Exception as e:
+            return jsonify({"ok": False, "detail": _friendly_error(e)})
 
     # ---------------- 認証 ----------------
     @app.route("/register", methods=["GET", "POST"])
@@ -255,13 +281,16 @@ def create_app():
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
+            job.error = None
             db.session.commit()
             try:
                 process_video(in_path, out_path, plan)
                 job.status = "完成"
                 job.output_path = out_path
-            except Exception:
+            except Exception as e:
                 job.status = "エラー"
+                job.error = _friendly_error(e)
+                _refund_credit(job)   # 失敗したら消費した1本を返す
             db.session.commit()
 
     # ---------------- 処理中 / 状態 ----------------
@@ -271,11 +300,19 @@ def create_app():
         job = _owned_job(job_id)
         return render_template("processing.html", job=job)
 
+    def _refund_credit(job):
+        """失敗時、アップロードで消費した1本を返す（無制限/月額は元々消費なし）。"""
+        if config.NO_LIMIT:
+            return
+        user = db.session.get(User, job.user_id)
+        if user and not user.subscription_active:
+            user.credits += 1
+
     @app.route("/status/<job_id>")
     @login_required
     def status(job_id):
         job = _owned_job(job_id)
-        return jsonify({"status": job.status})
+        return jsonify({"status": job.status, "error": job.error})
 
     # ---------------- 完成（プレビュー / ダウンロード）----------------
     @app.route("/result/<job_id>")
@@ -336,12 +373,14 @@ def create_app():
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
+            job.error = None
             db.session.commit()
             try:
                 reedit_textbased(output_path, kept_lines)
                 job.status = "完成"
-            except Exception:
+            except Exception as e:
                 job.status = "エラー"
+                job.error = _friendly_error(e)
             db.session.commit()
 
     def _owned_job(job_id):

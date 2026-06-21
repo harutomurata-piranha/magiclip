@@ -2,9 +2,13 @@
 {% block title %}処理中 - MagiClip{% endblock %}
 {% block content %}
 <div class="panelbox">
-  <h1>魔法をかけています…</h1>
-  <div class="spinner"></div>
+  <h1 id="title">魔法をかけています…</h1>
+  <div class="spinner" id="spinner"></div>
   <p class="muted" id="msg">AIが見どころを探しています</p>
+  <div id="failbox" style="display:none">
+    <a class="btn" href="{{ url_for('upload') }}">もう一度ためす</a>
+    <p class="muted" style="font-size:13px;margin-top:10px">失敗した場合、消費した本数は自動で返却されます。</p>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -12,13 +16,20 @@
   const jobId = "{{ job.id }}";
   const msgs = ["AIが見どころを探しています", "テンポよくカットしています", "字幕をつけています", "仕上げています"];
   let i = 0;
-  setInterval(() => { document.getElementById('msg').textContent = msgs[i++ % msgs.length]; }, 2500);
+  const ticker = setInterval(() => { document.getElementById('msg').textContent = msgs[i++ % msgs.length]; }, 2500);
+  function fail(detail) {
+    clearInterval(ticker);
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('title').textContent = 'うまくいきませんでした';
+    document.getElementById('msg').textContent = detail || 'エラーが発生しました。もう一度お試しください。';
+    document.getElementById('failbox').style.display = 'block';
+  }
   async function poll() {
     try {
       const r = await fetch(`/status/${jobId}`);
       const d = await r.json();
       if (d.status === '完成') { location.href = `/result/${jobId}`; return; }
-      if (d.status === 'エラー') { document.getElementById('msg').textContent = 'エラーが発生しました。もう一度お試しください。'; return; }
+      if (d.status === 'エラー') { fail(d.error); return; }
     } catch (e) {}
     setTimeout(poll, 2000);
   }

@@ -123,11 +123,9 @@ def process_video(input_path, output_path, plan="free"):
 
     scenes, bgm_mood, words, cleaned, duration = _transcribe_and_plan(input_path, stem)
 
-    # 見どころが取れなかった等の保険：シーンが無ければ素のコピーを返す
+    # シーンが取れなかったら「失敗」として扱う（黙って未編集の素材を完成扱いにしない）
     if not scenes:
-        import shutil
-        shutil.copy(input_path, output_path)
-        return output_path
+        raise RuntimeError("AIが編集構成を作れませんでした（素材が短すぎる/無音、またはAIの一時的な不調の可能性）")
 
     cut_path = stem + "_cut.mp4"
     E.edit_video(input_path, scenes, cut_path)   # ここで scenes に out_start/out_end が付く
