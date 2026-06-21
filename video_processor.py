@@ -112,6 +112,26 @@ def list_segments(output_path):
     return segs
 
 
+def _tighten_scenes(scenes, words, pad=0.12, min_trim=0.25):
+    """各シーンの前後の無音を、実際の発話（単語）の範囲まで詰める。
+    → 間延びが消えてテンポUP、かつ境界が単語の頭/末尾に揃うので『マがあります』等の単語切れも防げる。
+    詰めるのは無音が min_trim 秒より長い時だけ。pad 秒だけ余裕を残す。"""
+    for sc in scenes:
+        s, e = sc["start"], sc["end"]
+        inside = [w for w in words
+                  if w.get("start") is not None and w.get("end") is not None
+                  and w["start"] >= s - 0.05 and w["start"] < e]
+        if not inside:
+            continue
+        first = min(w["start"] for w in inside)
+        last = max(w["end"] for w in inside)
+        new_s = max(s, first - pad) if (first - s) > min_trim else s
+        new_e = min(e, last + pad) if (e - last) > min_trim else e
+        if new_e - new_s >= 0.4:
+            sc["start"], sc["end"] = round(new_s, 3), round(new_e, 3)
+    return scenes
+
+
 # ---------------- 公開API ----------------
 def process_video(input_path, output_path, plan="free"):
     """全自動編集（一般プラン）。完成動画を output_path に書き出す。
@@ -127,6 +147,7 @@ def process_video(input_path, output_path, plan="free"):
     if not scenes:
         raise RuntimeError("AIが編集構成を作れませんでした（素材が短すぎる/無音、またはAIの一時的な不調の可能性）")
 
+    scenes = _tighten_scenes(scenes, words)      # 端の無音を発話まで詰める（テンポUP＋境界の単語切れ防止）
     cut_path = stem + "_cut.mp4"
     E.edit_video(input_path, scenes, cut_path)   # ここで scenes に out_start/out_end が付く
     subtitles = _build_subtitles(words, scenes, cleaned)
