@@ -13,6 +13,19 @@
 
   <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
     <input type="hidden" name="scenes_json" id="scenes_json">
+
+    <div class="fontpick">
+      <label for="font">字幕の書体</label>
+      <select name="font" id="font">
+        {% for key, label in font_opts %}
+        <option value="{{ key }}" {% if key == cur_font %}selected{% endif %}>
+          {{ label }}{% if key == 'auto' %}（いまは「{{ ai_font }}」）{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <span class="muted" style="font-size:12px">書体で映像の雰囲気が変わります。迷ったら「AIにおまかせ」</span>
+    </div>
+
     <div class="scene-list" id="sceneList">
       {% for s in scenes %}
       <div class="scene-row {{ 'on' if s.selected else '' }}" data-i="{{ s.i }}">
@@ -32,6 +45,12 @@
 {% endblock %}
 {% block scripts %}
 <style>
+  .fontpick{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
+            padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+  .fontpick label{font-size:13px;font-weight:600;white-space:nowrap}
+  .fontpick select{background:var(--panel);border:1px solid var(--line);color:var(--text);
+                   border-radius:8px;padding:7px 10px;font-size:14px;font-family:inherit}
+  .fontpick select:focus{outline:none;border-color:var(--brand)}
   .scene-list{max-height:70vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px}
   .scene-row{display:flex;gap:10px;padding:10px 8px;border-radius:10px;align-items:flex-start;border-bottom:1px solid var(--line)}
   .scene-row:last-child{border-bottom:0}

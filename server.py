@@ -368,13 +368,19 @@ def create_app():
             if not kept:
                 flash("少なくとも1つのシーンを残してください（チェック＆文字あり）。", "error")
                 return redirect(url_for("edit", job_id=job_id))
+            font_key = request.form.get("font", "auto")          # 書体の手動指定（auto=AIにおまかせ）
             job.status = "処理中"
             db.session.commit()
-            threading.Thread(target=_run_reedit, args=(app, job_id, job.output_path, kept),
+            threading.Thread(target=_run_reedit,
+                             args=(app, job_id, job.output_path, kept, font_key),
                              daemon=True).start()
             return redirect(url_for("processing", job_id=job_id))
 
-        return render_template("edit.html", job=job, scenes=scenes)
+        data = load_edit_data(job.output_path) or {}
+        return render_template("edit.html", job=job, scenes=scenes,
+                               font_opts=engine.font_options(),
+                               cur_font=data.get("font_key", "auto"),
+                               ai_font=engine.pick_subtitle_font(data.get("bgm_mood", ""))[2])
 
     @app.route("/thumb/<job_id>/<int:idx>")
     @login_required
@@ -385,14 +391,14 @@ def create_app():
             abort(404)
         return send_file(path, mimetype="image/jpeg")
 
-    def _run_reedit(flask_app, job_id, output_path, kept_scenes):
+    def _run_reedit(flask_app, job_id, output_path, kept_scenes, font_key=None):
         with flask_app.app_context():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
             job.error = None
             db.session.commit()
             try:
-                reedit_segments(output_path, kept_scenes)
+                reedit_segments(output_path, kept_scenes, font_key)
                 job.status = "完成"
             except Exception as e:
                 job.status = "エラー"

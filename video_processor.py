@@ -58,12 +58,12 @@ def _build_subtitles(words, scenes, cleaned):
     return E.dedup_consecutive_subs(subs)   # 校正後の連続重複も除去
 
 
-def _finalize(cut_path, subtitles, bgm_mood, stem, output_path):
+def _finalize(cut_path, subtitles, bgm_mood, stem, output_path, font_key=None):
     """カット済み動画に字幕を焼き込み、BGMをミックスして完成。
-    字幕の書体は動画の雰囲気(bgm_mood)に合わせてAIの判断ごと自動で切り替える。"""
+    字幕の書体は動画の雰囲気(bgm_mood)から自動選択。font_key指定時はユーザーの選択を優先。"""
     srt = stem + "_subtitles.srt"
     subtitled = stem + "_subtitled.mp4"
-    font_choice = E.pick_subtitle_font(bgm_mood)
+    font_choice = E.font_by_key(font_key, bgm_mood)
     E.create_srt(subtitles, srt)
     E.burn_subtitles(cut_path, subtitles, subtitled, font_choice)
     bgm_path, _ = E.get_bgm(bgm_mood)
@@ -231,9 +231,9 @@ def _kept_ranges(edited, seg_words):
     return [(a, b) for a, b in ranges]
 
 
-def reedit_segments(output_path, kept):
+def reedit_segments(output_path, kept, font_key=None):
     """シーン単位の再編集（言葉起点）。選んだシーン＋編集テキストで映像を切り直す。
-    kept = [{"i","text","start","end"}]。
+    kept = [{"i","text","start","end"}]、font_key=字幕書体の手動指定（Noneや'auto'ならAIにおまかせ）。
     『シーンを外す＝その映像をカット／文字を一部消す＝その単語ぶんの映像も短くなる／文字を直す＝字幕も直る』。"""
     data = load_edit_data(output_path)
     if not data:
@@ -305,9 +305,11 @@ def reedit_segments(output_path, kept):
             c["end"] = c["start"] + 0.4
     res = E.dedup_consecutive_subs(res)
 
-    _finalize(stem + "_cut.mp4", res, data["bgm_mood"], stem, output_path)
+    _finalize(stem + "_cut.mp4", res, data["bgm_mood"], stem, output_path, font_key)
     data["scenes"] = [{"start": s["start"], "end": s["end"], "transition": s.get("transition", "cut")} for s in scenes]
     data["subtitles"] = res
+    data["font_key"] = font_key or "auto"                                   # 次回開いた時に選択を復元
+    data["font"] = E.font_by_key(font_key, data["bgm_mood"])[2]
     data["seg_keep"] = [it["i"] for it in items if "i" in it]
     data["seg_edits"] = {str(it["i"]): it["text"] for it in items if "i" in it and it.get("text")}
     _save_data(output_path, data)

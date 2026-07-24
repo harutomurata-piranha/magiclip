@@ -389,13 +389,34 @@ def _matched_mood(mood):
 
 
 def pick_subtitle_font(mood):
-    """動画のムードに合う字幕フォントを選ぶ → (path, index, label, scale)。
+    """動画のムードに合う字幕フォントを選ぶ → (path, index, label, scale, stroke)。
     ムード不明・フォント未導入なら既定の標準ゴシック（迷ったら無難に、が最優先）。"""
     cat = _matched_mood(mood)
     ent = FONT_MOODS.get(cat) if cat else None
     if ent and ent[0] and os.path.exists(ent[0]):
         return ent
     return DEFAULT_FONT
+
+
+def font_options():
+    """プロ編集で選べる書体の一覧 → [(key, label)]。この環境に無い書体は出さない。"""
+    opts = [("auto", "AIにおまかせ")]
+    for key, ent in FONT_MOODS.items():
+        if ent[0] and os.path.exists(ent[0]):
+            opts.append((key, ent[2]))
+    opts.append(("default", DEFAULT_FONT[2]))
+    return opts
+
+
+def font_by_key(key, mood=""):
+    """キー指定の書体を返す。'auto'/未知/未導入なら雰囲気からの自動選択にフォールバック。"""
+    if key and key != "auto":
+        if key == "default":
+            return DEFAULT_FONT
+        ent = FONT_MOODS.get(key)
+        if ent and ent[0] and os.path.exists(ent[0]):
+            return ent
+    return pick_subtitle_font(mood)
 
 def mix_bgm(video_path, bgm_path, output_path, volume=0.15):
     result = subprocess.run([
