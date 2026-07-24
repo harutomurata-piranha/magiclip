@@ -59,11 +59,13 @@ def _build_subtitles(words, scenes, cleaned):
 
 
 def _finalize(cut_path, subtitles, bgm_mood, stem, output_path):
-    """カット済み動画に字幕を焼き込み、BGMをミックスして完成。"""
+    """カット済み動画に字幕を焼き込み、BGMをミックスして完成。
+    字幕の書体は動画の雰囲気(bgm_mood)に合わせてAIの判断ごと自動で切り替える。"""
     srt = stem + "_subtitles.srt"
     subtitled = stem + "_subtitled.mp4"
+    font_choice = E.pick_subtitle_font(bgm_mood)
     E.create_srt(subtitles, srt)
-    E.burn_subtitles(cut_path, subtitles, subtitled)
+    E.burn_subtitles(cut_path, subtitles, subtitled, font_choice)
     bgm_path, _ = E.get_bgm(bgm_mood)
     if bgm_path and E.mix_bgm(subtitled, bgm_path, output_path):
         if os.path.exists(subtitled):
@@ -477,6 +479,7 @@ def process_video(input_path, output_path, plan="free"):
     _save_data(output_path, {
         "input_path": input_path,
         "bgm_mood": bgm_mood,
+        "font": E.pick_subtitle_font(bgm_mood)[2],   # 選ばれた書体（表示・再編集用）
         "words": words,
         "cleaned": [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in cleaned],
         "scenes": [{"start": s["start"], "end": s["end"],

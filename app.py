@@ -362,6 +362,41 @@ def get_bgm(mood):
             return path, name
     return None, None
 
+
+# ===== 字幕フォント：物語・映像の雰囲気に合わせて自動で選ぶ =====
+# フォントが変わると映像の印象は大きく変わる。AIが既に出している mood をそのまま使うので
+# 追加のAI呼び出し・コストはゼロ。フォントが無い環境（本番Linux等）では既定フォントに落ちる。
+# (パス, ttcのindex, ユーザー向けの呼び名, 文字サイズ倍率, 黒フチの太さ)
+# ※フチは視認性の生命線。線の細い書体（明朝・丸ゴ）はフチを太くして背景に負けないようにする。
+FONT_MOODS = {
+    "bright":    ("/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc", 1, "丸ゴシック（親しみ・明るい）", 1.00, 4),
+    "comical":   (os.path.expanduser("~/Library/Fonts/CP Font.otf"), 0, "ポップ体（コミカル・元気）", 0.94, 3),
+    "emotional": ("/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", 2, "明朝体（情感・余韻）", 1.04, 5),
+    "tense":     ("/System/Library/Fonts/ヒラギノ角ゴシック W8.ttc", 0, "太ゴシック（迫力・緊張感）", 1.00, 3),
+    "stylish":   (os.path.expanduser("~/Library/Fonts/Corporate-Logo-Bold-ver3.otf"), 0, "モダンゴシック（おしゃれ）", 1.00, 3),
+}
+DEFAULT_FONT = (SUBTITLE_FONT, 0, "標準ゴシック（読みやすい）", 1.00, 3)
+
+
+def _matched_mood(mood):
+    """moodがキーワードに実際に当たったカテゴリを返す（当たらなければNone）。
+    BGMは既定brightで良いが、フォントは当たらなければ『無難な標準ゴシック』に落としたいので分ける。"""
+    m = (mood or "").lower()
+    for cat, keywords in MOOD_KEYWORDS.items():
+        if any(kw.lower() in m for kw in keywords):
+            return cat
+    return None
+
+
+def pick_subtitle_font(mood):
+    """動画のムードに合う字幕フォントを選ぶ → (path, index, label, scale)。
+    ムード不明・フォント未導入なら既定の標準ゴシック（迷ったら無難に、が最優先）。"""
+    cat = _matched_mood(mood)
+    ent = FONT_MOODS.get(cat) if cat else None
+    if ent and ent[0] and os.path.exists(ent[0]):
+        return ent
+    return DEFAULT_FONT
+
 def mix_bgm(video_path, bgm_path, output_path, volume=0.15):
     result = subprocess.run([
         "ffmpeg", "-i", video_path, "-stream_loop", "-1", "-i", bgm_path,
@@ -617,15 +652,20 @@ def wrap_text(text, font, max_width, draw):
         lines.append(cur)
     return lines
 
-def render_subtitle_png(text, w, h, path):
-    """字幕1枚を透過PNGとして描画（下部中央・白文字＋黒フチ）"""
+def render_subtitle_png(text, w, h, path, font_choice=None):
+    """字幕1枚を透過PNGとして描画（下部中央・白文字＋黒フチ）。
+    font_choice=(path,index,label,scale) で雰囲気に合わせた書体を使う（Noneなら既定）。"""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font_size = 52   # ショート向けに大きめ（短いキューと合わせて読みやすく）
+    fpath, fidx, _label, scale, stroke = font_choice or DEFAULT_FONT
+    font_size = int(52 * scale)   # ショート向けに大きめ（短いキューと合わせて読みやすく）
     try:
-        font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
-    except:
-        font = ImageFont.load_default()
+        font = ImageFont.truetype(fpath, font_size, index=fidx) if fpath else ImageFont.load_default()
+    except Exception:
+        try:   # 選んだ書体が使えない環境では既定フォントに落ちる（字幕を失わない）
+            font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
     lines = wrap_text(text, font, int(w * 0.90), draw)
     line_height = font_size + 12
     start_y = h - 140 - line_height * len(lines)
@@ -634,7 +674,7 @@ def render_subtitle_png(text, w, h, path):
         x = (w - (bbox[2] - bbox[0])) // 2
         try:
             draw.text((x, start_y), line, font=font, fill=(255, 255, 255, 255),
-                      stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                      stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
         except TypeError:
             for dx in (-2, 0, 2):
                 for dy in (-2, 0, 2):
@@ -695,8 +735,9 @@ def add_watermark(input_path, output_path):
     return r.returncode == 0
 
 
-def burn_subtitles(input_path, subtitles, output_path):
-    """字幕を透過PNGとしてoverlayで1パス合成する（全フレーム展開せず高速・無劣化）"""
+def burn_subtitles(input_path, subtitles, output_path, font_choice=None):
+    """字幕を透過PNGとしてoverlayで1パス合成する（全フレーム展開せず高速・無劣化）。
+    font_choice で動画の雰囲気に合った書体を使う。"""
     if not subtitles:
         shutil.copy(input_path, output_path)
         return
@@ -712,7 +753,7 @@ def burn_subtitles(input_path, subtitles, output_path):
     last = "0:v"
     for i, sub in enumerate(subtitles):
         png = f"{OUTPUT_FOLDER}/_sub_{i}.png"
-        render_subtitle_png(sub["text"], w, h, png)
+        render_subtitle_png(sub["text"], w, h, png, font_choice)
         png_paths.append(png)
         inputs += ["-i", png]
         cur = f"v{i+1}"
@@ -792,7 +833,9 @@ def _generate_and_build(job_id):
     create_srt(subtitles, srt_path)
 
     job["progress"] = 88
-    burn_subtitles(output_path, subtitles, subtitled_path)
+    font_choice = pick_subtitle_font(bgm_mood)   # 雰囲気に合った書体を選ぶ
+    job["font"] = font_choice[2]
+    burn_subtitles(output_path, subtitles, subtitled_path, font_choice)
 
     job["progress"] = 95
     bgm_path, _ = get_bgm(bgm_mood)
