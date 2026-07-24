@@ -26,11 +26,16 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 jobs = {}
 
+# 同梱フォント置き場（OFL＝商用利用可の日本語フォント。OSに依存せずどこでも同じ見た目にする）
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+
 def _resolve_font():
-    """字幕用の日本語フォントを環境に応じて探す（mac=ヒラギノ / Linux=Noto CJK）"""
+    """字幕用の日本語フォントを探す。同梱フォント最優先→OS標準（mac=ヒラギノ / Linux=Noto CJK）"""
     import glob
     candidates = [
         os.environ.get("SUBTITLE_FONT", ""),
+        f"{FONT_DIR}/NotoSansJP[wght].ttf",                  # 同梱（商用可・環境非依存）
         "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",   # macOS
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",   # Linux (fonts-noto-cjk)
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -45,6 +50,20 @@ def _resolve_font():
     return None
 
 SUBTITLE_FONT = _resolve_font()
+
+
+def load_font(path, size, index=0, variation=None):
+    """フォント読み込み。可変フォント(Noto等)はウェイトを必ず指定する
+    ——未指定だと極細で描画され、動画上でほぼ読めなくなるため既定はBold。"""
+    font = ImageFont.truetype(path, size, index=index)
+    try:
+        names = [n.decode() if isinstance(n, bytes) else n for n in font.get_variation_names()]
+        want = variation if variation in names else ("Bold" if "Bold" in names else None)
+        if want:
+            font.set_variation_by_name(want)
+    except Exception:
+        pass          # 可変でないフォントはそのまま
+    return font
 
 def get_video_duration(video_path):
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path], capture_output=True, text=True)
@@ -366,16 +385,20 @@ def get_bgm(mood):
 # ===== 字幕フォント：物語・映像の雰囲気に合わせて自動で選ぶ =====
 # フォントが変わると映像の印象は大きく変わる。AIが既に出している mood をそのまま使うので
 # 追加のAI呼び出し・コストはゼロ。フォントが無い環境（本番Linux等）では既定フォントに落ちる。
-# (パス, ttcのindex, ユーザー向けの呼び名, 文字サイズ倍率, 黒フチの太さ)
+# (パス, ttcのindex, ユーザー向けの呼び名, 文字サイズ倍率, 黒フチの太さ, 可変フォントのウェイト名)
 # ※フチは視認性の生命線。線の細い書体（明朝・丸ゴ）はフチを太くして背景に負けないようにする。
+# ※すべて fonts/ に同梱した SIL Open Font License の書体（商用利用・動画への埋め込み可）。
+#   OSにインストールされた書体に依存しないので、macでも本番Linuxでも同じ見た目になる。
 FONT_MOODS = {
-    "bright":    ("/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc", 1, "丸ゴシック（親しみ・明るい）", 1.00, 4),
-    "comical":   (os.path.expanduser("~/Library/Fonts/CP Font.otf"), 0, "ポップ体（コミカル・元気）", 0.94, 3),
-    "emotional": ("/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", 2, "明朝体（情感・余韻）", 1.04, 5),
-    "tense":     ("/System/Library/Fonts/ヒラギノ角ゴシック W8.ttc", 0, "太ゴシック（迫力・緊張感）", 1.00, 3),
-    "stylish":   (os.path.expanduser("~/Library/Fonts/Corporate-Logo-Bold-ver3.otf"), 0, "モダンゴシック（おしゃれ）", 1.00, 3),
+    "bright":    (f"{FONT_DIR}/ZenMaruGothic-Bold.ttf",     0, "丸ゴシック（親しみ・明るい）",  1.00, 4, None),
+    "comical":   (f"{FONT_DIR}/DelaGothicOne-Regular.ttf",  0, "ポップ体（コミカル・元気）",    0.92, 3, None),
+    "emotional": (f"{FONT_DIR}/ShipporiMinchoB1-Bold.ttf",  0, "明朝体（情感・余韻）",          1.04, 5, None),
+    "tense":     (f"{FONT_DIR}/NotoSansJP[wght].ttf",       0, "太ゴシック（迫力・緊張感）",    1.00, 3, "Black"),
+    "stylish":   (f"{FONT_DIR}/ZenKakuGothicNew-Bold.ttf",  0, "モダンゴシック（おしゃれ）",    1.00, 3, None),
 }
-DEFAULT_FONT = (SUBTITLE_FONT, 0, "標準ゴシック（読みやすい）", 1.00, 3)
+_NOTO = f"{FONT_DIR}/NotoSansJP[wght].ttf"
+DEFAULT_FONT = ((_NOTO, 0, "標準ゴシック（読みやすい）", 1.00, 3, "Bold") if os.path.exists(_NOTO)
+                else (SUBTITLE_FONT, 0, "標準ゴシック（読みやすい）", 1.00, 3, None))
 
 
 def _matched_mood(mood):
@@ -678,13 +701,13 @@ def render_subtitle_png(text, w, h, path, font_choice=None):
     font_choice=(path,index,label,scale) で雰囲気に合わせた書体を使う（Noneなら既定）。"""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    fpath, fidx, _label, scale, stroke = font_choice or DEFAULT_FONT
+    fpath, fidx, _label, scale, stroke, variation = font_choice or DEFAULT_FONT
     font_size = int(52 * scale)   # ショート向けに大きめ（短いキューと合わせて読みやすく）
     try:
-        font = ImageFont.truetype(fpath, font_size, index=fidx) if fpath else ImageFont.load_default()
+        font = load_font(fpath, font_size, fidx, variation) if fpath else ImageFont.load_default()
     except Exception:
         try:   # 選んだ書体が使えない環境では既定フォントに落ちる（字幕を失わない）
-            font = ImageFont.truetype(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
+            font = load_font(SUBTITLE_FONT, font_size) if SUBTITLE_FONT else ImageFont.load_default()
         except Exception:
             font = ImageFont.load_default()
     lines = wrap_text(text, font, int(w * 0.90), draw)
@@ -711,7 +734,7 @@ def _render_watermark_png(w, h, path, alpha=150):
     draw = ImageDraw.Draw(img)
     size = max(26, w // 36)            # 動画幅に合わせた文字サイズ
     try:
-        font = ImageFont.truetype(SUBTITLE_FONT, size) if SUBTITLE_FONT else ImageFont.load_default()
+        font = load_font(SUBTITLE_FONT, size) if SUBTITLE_FONT else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
     text = "MagiClip"
