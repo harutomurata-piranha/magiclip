@@ -249,22 +249,69 @@ def _scenes_from_kept(cleaned_segments, drop):
     return scenes
 
 
+def refine_transcript(cleaned_segments):
+    """編集判断の前に、文字起こしを『意味の通る日本語』へ整える（文脈理解つき・テキスト起点編集の要）。
+    各行を1:1で、明らかな音声認識の誤りだけ文脈から直す（統合/分割/並べ替え/要約はしない）。
+    ここで整えたテキストで「残す/落とす」を判断する。返り値=整えた本文リスト（長さ・順序は入力と同一）。
+    タイミングには使わない（＝同期に影響しない）。失敗時は原文をそのまま返す。"""
+    if not cleaned_segments:
+        return []
+    numbered = "".join(f"[{i}] {s['text'].strip()}\n" for i, s in enumerate(cleaned_segments))
+    prompt = f"""以下は動画の音声を自動認識した日本語の文字起こしです（各行[i]）。
+話の流れ（文脈）を踏まえ、各行を「意味の通る自然な日本語」に整えてください。
+目的は、この後の編集で「どこが伝えたい内容で、どこが意味を成さないか」を正しく判断できるようにすることです。
+
+【やること】
+- 明らかな音声認識の誤変換・言い間違いを、文脈から正しい語に直す（例：文脈上「5切るから」→「5千円切るから」）
+- 固有名詞・地名・店名も、前後から明らかなら整える（不明なら変えない）
+
+【禁止】
+- 行の統合・分割・順序変更・要約・言い換えはしない（各行は1:1で対応）
+- どうしても意味を復元できない行は、無理に作らずそのまま残す
+
+[i]の個数・順序は入力と完全一致で、次の形式だけで返してください（他の文章は不要）：
+[0] 整えた本文
+[1] 整えた本文
+...
+
+文字起こし：
+{numbered}"""
+    try:
+        msg = anthropic_client.messages.create(
+            model=STRUCTURE_MODEL, max_tokens=3000,
+            messages=[{"role": "user", "content": prompt}])
+        out = msg.content[0].text.strip()
+    except Exception:
+        return [s["text"] for s in cleaned_segments]
+    parts = re.split(r'\[(\d+)\]', out)
+    parsed = {}
+    for k in range(1, len(parts) - 1, 2):
+        parsed[int(parts[k])] = ' '.join(re.sub(r'\[\d+\]', '', parts[k + 1]).split()).strip()
+    return [parsed.get(i, "").strip() or s["text"] for i, s in enumerate(cleaned_segments)]
+
+
 def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
-    """『原則すべて残し、落とすものだけ選ぶ』方式で編集する（keep-by-default）。
+    """『原則すべて残し、落とすものだけ選ぶ』方式で編集する（keep-by-default・テキスト起点）。
+    まず文字起こしを整えて文脈を理解し、その"意味の通るテキスト"で「残す/落とす」を判断する。
     "良い所を選び抜く"のではなく、意味の通らない所・無音・空フィラーだけを落とす。
-    こうすることで、話している内容（撮影者が伝えたいこと）を丸ごと失わない。"""
+    ※整えたテキストは編集判断にだけ使い、start/endは元の値のまま（字幕の同期に影響しない）。"""
     if not cleaned_segments:
         return '{"scenes": []}'
-    annotated = _annotate_segments(cleaned_segments)
     rules = _shared_rules(duration)
 
-    # 1) 素材を理解する（編集の前提）
+    # 0) テキストを整えて文脈を理解する（テキスト起点編集の起点）。start/endは元のまま
+    refined_texts = refine_transcript(cleaned_segments)
+    refined = [{"start": s["start"], "end": s["end"], "text": refined_texts[i],
+                "avg_logprob": s.get("avg_logprob", 0.0)} for i, s in enumerate(cleaned_segments)]
+
+    # 1) 整えたテキストで素材を理解する（編集の前提）
+    annotated = _annotate_segments(refined)
     analysis = analyze_content(annotated, duration)
     analysis_block = f"# この素材の分析（編集の前提として必ず踏まえる）\n{analysis}\n\n" if analysis else ""
 
     note_block = f"\n【もう一度生成】{note}（ただし意味の通る発話は今回も残す）\n" if note else ""
     numbered = "\n".join(
-        f"[{i}] {s['start']:.1f}-{s['end']:.1f}秒 {s['text']}" for i, s in enumerate(cleaned_segments))
+        f"[{i}] {s['start']:.1f}-{s['end']:.1f}秒 {s['text']}" for i, s in enumerate(refined))
 
     # 2) 「落とすセグメント」だけを選ばせる（挙げなければ残る＝原則残す）
     prompt = (f"あなたはMagiClipのショート動画編集者です。下の【MagiClipの編集方針】に従ってください。\n\n"
@@ -292,13 +339,13 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
         except Exception:
             continue
 
-    scenes = _scenes_from_kept(cleaned_segments, drop)
+    scenes = _scenes_from_kept(refined, drop)          # start/endは元の値（refined＝同じ時刻）
     if not scenes:                                     # 万一全部落とした→原則残す（安全側）
-        scenes = _scenes_from_kept(cleaned_segments, set())
+        scenes = _scenes_from_kept(refined, set())
 
     # 3) 自己チェック：日本語として意味が通らない場面だけが残っていれば除去（意味の通る発話は触らない）
     if analysis:
-        scenes = refine_scenes(scenes, analysis, cleaned_segments, duration)
+        scenes = refine_scenes(scenes, analysis, refined, duration)
     return json.dumps({"scenes": scenes, "bgm_mood": bgm_mood}, ensure_ascii=False)
 
 
