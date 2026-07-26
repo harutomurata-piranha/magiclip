@@ -247,7 +247,75 @@ def generate_structure(cleaned_segments, duration, prev_choices=None, note=""):
               f"原則を最優先に：①速い→長い→速いのリズム②人間味を消さない③余韻のある締めで終わる。\n"
               f"物語性を最優先：場面は時系列順を保ち、前後に入れ替えない。無駄だけ削り、見どころや締めは削らない（無理に絞り込まない）。\n"
               f"以下のJSON形式のみで答えてください（他の文章は不要）。\n{JSON_SPEC}")
-    return _structure_json(prompt) or '{"scenes": []}'
+    struct = _structure_json(prompt) or '{"scenes": []}'
+
+    # 3) 自己チェック：分析が「明らかに不要」とした場面（偽の締め・意味不明な誤認識）が
+    #    選定に残っていれば、それだけ除去する（見どころ・締め・微妙なものは触らない）
+    try:
+        data = json.loads(struct)
+        if data.get("scenes") and analysis:
+            data["scenes"] = refine_scenes(data["scenes"], analysis, cleaned_segments, duration)
+            struct = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        pass   # チェックが何かで失敗しても、選定結果はそのまま活かす（安全側）
+    return struct
+
+
+def _scene_text(sc, cleaned):
+    """シーン範囲に含まれるセグメント本文をつなげる（自己チェックの判断材料）。"""
+    return " ".join(s["text"] for s in cleaned
+                    if s["start"] >= sc["start"] - 0.3 and s["start"] < sc["end"])
+
+
+def refine_scenes(scenes, analysis, cleaned, duration):
+    """選定後の自己チェック（③）。分析が“明らかに不要”とした場面だけを除去する。
+    - 対象：偽の締め（途中で一度締めて再開）／意味不明な音声誤認識／中身のない長い冗長 のみ
+    - 見どころ・本当の締め（最後のシーン）・人間味・判断が微妙なものは残す（絞りすぎ防止）
+    - 減らしすぎる結果になったら適用しない（安全網）。時系列は保つ。"""
+    if not analysis or len(scenes) <= 3:
+        return scenes
+    n = len(scenes)
+    listing = "\n".join(
+        f"[{i}] {sc['start']:.1f}-{sc['end']:.1f}秒: {_scene_text(sc, cleaned)}"
+        for i, sc in enumerate(scenes))
+    prompt = f"""あなたはMagiClipの編集品質チェック担当です。選ばれたシーンの中から、
+「取り除いても誰も困らない、明確に不要なシーン」だけをピンポイントで見つけてください。
+迷ったら必ず残す——これは最終確認であり、大掃除ではありません。
+
+# 選ばれたシーン（時系列順・[番号]）
+{listing}
+
+【除去してよいのは、次のどちらかに“はっきり”当てはまるシーンだけ】
+1. 偽の締め：動画の途中なのに「一旦こんな感じですね」「以上です」「この辺で」等で一度話を締めて、
+   そのあとまた別の話が続いている場面（＝流れを分断する中途半端な区切り）
+2. 意味不明：音声認識の誤変換で文意が通らず、情報としてまったく機能しない場面
+
+【除去してはいけない（重要）】
+- 冒頭（導入）のシーンは残す。地味でも時系列の入り口として必要
+- お店・地名・施設名などの紹介、実用的な一言（注意・感想・豆知識）は“見どころ”として残す
+- 最後のシーン（締め）は必ず残す
+- 少しでも情報や人間味があるもの、判断に迷うものは残す
+
+ほとんどの動画では除去ゼロが正常です。上の1か2に明確に当てはまるものが無ければ空で答えてください。
+除去すべきシーンの番号だけをJSONで（他の文章は不要）：
+{{"remove": [番号, ...]}}"""
+    try:
+        msg = anthropic_client.messages.create(
+            model=STRUCTURE_MODEL, max_tokens=200,
+            messages=[{"role": "user", "content": prompt}])
+        txt = msg.content[0].text.replace("```json", "").replace("```", "").strip()
+        remove = {int(x) for x in json.loads(txt).get("remove", [])}
+    except Exception:
+        return scenes                        # チェック失敗時は選定をそのまま使う（安全側）
+    remove.discard(0)                        # 冒頭（導入）は現状維持＝守る
+    remove.discard(n - 1)                    # 最後のシーン＝締めは必ず守る
+    # 安全網：除去は最大でも全体の1/4まで（やり過ぎ防止）。超えたら信用せず適用しない
+    if len(remove) > max(1, n // 4):
+        return scenes
+    kept = [sc for i, sc in enumerate(scenes) if i not in remove]
+    if len(kept) < 3:
+        return scenes
+    return kept
 
 def remove_overlapping_scenes(scenes):
     """時系列順に並べ、重複（同じ映像の二重表示）を除く。

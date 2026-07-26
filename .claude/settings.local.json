@@ -67,7 +67,10 @@
       "Bash(ffmpeg -hide_banner -i IMG_0798.MOV -t 10 -vn -ar 44100 -ac 1 -b:a 128k /tmp/intro.mp3 -y)",
       "Bash(git add *)",
       "Bash(git commit -q -m '編集クオリティ向上: 完結する構成＋自然な字幕改行 *)",
-      "Bash(git tag *)"
+      "Bash(git tag *)",
+      "Bash(python3 -m py_compile app.py video_processor.py server.py)",
+      "Bash(exit 1)",
+      "Bash(git commit *)"
     ]
   }
 }
