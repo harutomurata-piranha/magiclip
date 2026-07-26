@@ -755,22 +755,29 @@ _CLAUSE_END = ("けど", "けれど", "から", "ので", "のに", "たら", "�
 LINE_CHARS_MAX = 12
 
 _TOKENIZER = None
+_JIRITSU = {"名詞", "動詞", "形容詞", "副詞", "連体詞", "接続詞", "感動詞"}   # 自立語（文節の先頭になれる）
+
 def _break_positions(text):
-    """形態素解析で「単語の切れ目」の文字位置を返す（ここでしか改行しない＝語の途中で切らない）。
+    """形態素解析で「文節の切れ目」の文字位置を返す（ここでしか改行しない）。
+    付属語（助詞・助動詞・接尾・非自立語＝な/です/が/ところ/さん 等）は前の語にくっつけ、
+    自立語（名詞・動詞など）の直前でだけ改行できるようにする＝『有名｜な』のような切れを防ぐ。
     janomeが使えない環境では None を返し、従来の文字ベース判定にフォールバックする。"""
     global _TOKENIZER
     try:
         if _TOKENIZER is None:
             from janome.tokenizer import Tokenizer
-            _TOKENIZER = Tokenizer(wakati=True)
-        pos, positions, total = 0, set(), 0
-        for surface in _TOKENIZER.tokenize(text):
-            pos += len(surface)
-            positions.add(pos)          # このトークンの末尾＝改行してよい位置
-            total += len(surface)
+            _TOKENIZER = Tokenizer()
+        positions, total = set(), 0
+        for tok in _TOKENIZER.tokenize(text):
+            parts = tok.part_of_speech.split(",")
+            pos0 = parts[0]
+            pos1 = parts[1] if len(parts) > 1 else ""
+            # 自立語で、かつ付属的(非自立・接尾)でなければ「新しい文節の先頭」＝その手前で改行可
+            if total > 0 and pos0 in _JIRITSU and pos1 not in ("非自立", "接尾"):
+                positions.add(total)
+            total += len(tok.surface)
         if total != len(text):          # 解析結果が元と長さ不一致なら信用しない
             return None
-        positions.discard(len(text))
         # 空白（こちらが入れた区切り）は必ず改行候補に含める
         for idx, ch in enumerate(text):
             if ch == " ":
@@ -805,26 +812,35 @@ def wrap_text(text, font, max_width, draw):
         if width(text[:i]) > max_width or width(text[i:]) > max_width:
             continue
         prev, nxt = text[i - 1], text[i]
-        score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える）
-        # 改行してよい「自然な区切り」の優先度
+        score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える＝最優先）
+        natural = True
         if prev == " " or nxt == " ":
-            score -= 20; natural = True    # 空白（＝こちらが入れた区切り）を最優先
-        elif prev in "、。！？":
-            score -= 12; natural = True    # 句読点の直後
-        elif any(text[:i].endswith(e) for e in _CLAUSE_END):
-            score -= 11; natural = True    # 文節・節の切れ目（です/ます/けど/から…）＝意味のまとまり
-        elif prev in _BREAK_AFTER:
-            score -= 4;  natural = True    # 助詞の直後
+            score -= 20                    # 空白（＝こちらが入れた区切り）は最優先で切る
+        elif breaks is not None:
+            # 文節モード：候補はどれも良い区切り。バランス優先で、区切り種別は軽い加点のみ
+            if prev in "、。！？":
+                score -= 3
+            elif any(text[:i].endswith(e) for e in _CLAUSE_END):
+                score -= 2                 # 文節・節の切れ目を少しだけ優遇
+            elif prev in _BREAK_AFTER:
+                score -= 1
         else:
-            natural = False
-        # 単語境界が取れていない（フォールバック時）だけ、語の途中で割るペナルティを効かせる
-        if breaks is None and not natural:
-            if _kata(prev) and _kata(nxt):
-                score += 15
-            elif _kanji(prev) and _kanji(nxt):
-                score += 5
-            elif _hira(prev) and _hira(nxt):
-                score += 10
+            # フォールバック（文字ベース）：強めに自然な区切りへ誘導＋語中で割るのを防ぐ
+            if prev in "、。！？":
+                score -= 12
+            elif any(text[:i].endswith(e) for e in _CLAUSE_END):
+                score -= 11
+            elif prev in _BREAK_AFTER:
+                score -= 4
+            else:
+                natural = False
+            if not natural:
+                if _kata(prev) and _kata(nxt):
+                    score += 15
+                elif _kanji(prev) and _kanji(nxt):
+                    score += 5
+                elif _hira(prev) and _hira(nxt):
+                    score += 10
         if nxt in _BAD_LINE_HEAD or prev in "ー":
             score += 8                     # 行頭に小書き・長音等が来る改行は避ける（見た目）
         la, lb = len(text[:i].strip()), len(text[i:].strip())
