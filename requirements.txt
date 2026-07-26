@@ -7,3 +7,4 @@ anthropic>=0.109
 pillow>=11.0
 python-dotenv>=1.0
 gunicorn>=23.0
+janome>=0.5

@@ -77,7 +77,11 @@
       "Bash(curl -s -o /dev/null http://127.0.0.1:5050/)",
       "Bash(break)",
       "Bash(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5050/)",
-      "Bash(echo \"5050: HTTP $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5050/\\)\")"
+      "Bash(echo \"5050: HTTP $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5050/\\)\")",
+      "WebSearch",
+      "Bash(pip install *)",
+      "Bash(python3 -c \"from janome.tokenizer import Tokenizer; t=Tokenizer\\(\\); print\\([tok.surface for tok in t.tokenize\\('5切るから飲めるところなんで結構いいですね'\\)]\\)\")",
+      "Bash(python3 -m pip install janome)"
     ]
   }
 }

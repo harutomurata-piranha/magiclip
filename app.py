@@ -624,8 +624,8 @@ def correct_segments(segments, reference=""):
 
 PAUSE_SPLIT = 0.4     # 単語間がこれ以上空いたら「話の区切り」→字幕を分ける（音声と同期させる肝）
 CUE_MAX_DUR = 8.0     # 1キューの最大表示秒数（暴走防止の安全網）
-CUE_SOFT_CHARS = 14   # この長さを超えたら、次の"自然な区切り"（助詞・文末）で切る → 短く読みやすく
-CUE_HARD_CHARS = 30   # それでも切れない時の強制上限（暴走防止）
+CUE_SOFT_CHARS = 13   # この長さを超えたら、次の"自然な区切り"（助詞・文末）で切る → 短く読みやすく
+CUE_HARD_CHARS = 22   # 強制上限。縦型ショートは2行×約11字までが読みやすい（Web調査）ため低めに
 CUE_MIN_SHOW = 0.7    # 1キューの最低表示秒数（一瞬で消えないように）
 # キューを切ってよいのは"文末系"だけにする（句読点＋終助詞ね/よ/わ）。
 # が/を/に/は/も 等の格助詞で切ると述語が次行に孤立する（「ファミマが」｜「あります」）ため使わない。
@@ -748,43 +748,89 @@ def create_srt(segments, output_srt):
 # 改行位置の良し悪し（読みやすさ）の判定に使う文字
 _BREAK_AFTER = "、。！？" + "はがをにへとでもやのからまでねよさ"   # この直後で改行すると自然（句読点・助詞）
 _BAD_LINE_HEAD = "、。！？ー〜ゃゅょっぁぃぅぇぉ・"                  # 行頭に来てほしくない文字
+# 節（文節）の切れ目になりやすい語末。ここで切ると意味のまとまりで改行できる（ひらがな連続でも切ってよい）
+_CLAUSE_END = ("けど", "けれど", "から", "ので", "のに", "たら", "なら", "って",
+               "です", "ます", "ました", "でした", "ですね", "ますね", "だけど", "だから")
+# 縦型ショート向けの1行の目安（Web調査：縦型は1行8〜10字・最大2行・文節で改行が読みやすい）
+LINE_CHARS_MAX = 12
+
+_TOKENIZER = None
+def _break_positions(text):
+    """形態素解析で「単語の切れ目」の文字位置を返す（ここでしか改行しない＝語の途中で切らない）。
+    janomeが使えない環境では None を返し、従来の文字ベース判定にフォールバックする。"""
+    global _TOKENIZER
+    try:
+        if _TOKENIZER is None:
+            from janome.tokenizer import Tokenizer
+            _TOKENIZER = Tokenizer(wakati=True)
+        pos, positions, total = 0, set(), 0
+        for surface in _TOKENIZER.tokenize(text):
+            pos += len(surface)
+            positions.add(pos)          # このトークンの末尾＝改行してよい位置
+            total += len(surface)
+        if total != len(text):          # 解析結果が元と長さ不一致なら信用しない
+            return None
+        positions.discard(len(text))
+        # 空白（こちらが入れた区切り）は必ず改行候補に含める
+        for idx, ch in enumerate(text):
+            if ch == " ":
+                positions.add(idx); positions.add(idx + 1)
+        return {p for p in positions if 0 < p < len(text)}
+    except Exception:
+        return None
 
 def wrap_text(text, font, max_width, draw):
-    """字幕を読みやすく改行する。1行に収まればそのまま。
-    収まらなければ「左右の長さが揃う中央付近」かつ「助詞・句読点など自然な位置」で2行に分ける。"""
+    """字幕を読みやすく改行する。縦型ショート基準で、1行が長い(=12字超)場合も2行に分ける。
+    改行は形態素解析で得た「単語の切れ目」だけで行い、語の途中では絶対に切らない。
+    その中から「空白＞句読点＞文節末(です/けど等)＞助詞」を優先し、左右の長さを揃える。"""
     def width(s):
         b = draw.textbbox((0, 0), s, font=font)
         return b[2] - b[0]
 
-    if width(text) <= max_width:
+    # 1行に収まり、かつ十分短ければそのまま1行（縦型は1行を短く保つほど読みやすい）
+    if width(text) <= max_width and len(text) <= LINE_CHARS_MAX:
         return [text]
 
     n = len(text)
     target = n / 2
+    breaks = _break_positions(text)                 # 単語境界（無ければ従来通り全位置）
+    candidates = sorted(breaks) if breaks else range(1, n)
     best = None
-    for i in range(1, n):
+    def _kata(c): return "゠" <= c <= "ヿ"
+    def _kanji(c): return "一" <= c <= "鿿"
+    def _hira(c): return "ぁ" <= c <= "ゟ"
+    for i in candidates:
+        if not (0 < i < n):
+            continue
         if width(text[:i]) > max_width or width(text[i:]) > max_width:
             continue
-        score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える）
         prev, nxt = text[i - 1], text[i]
-        def _kata(c): return "゠" <= c <= "ヿ"
-        def _kanji(c): return "一" <= c <= "鿿"
+        score = abs(i - target)            # 中央に近いほど良い（左右の文字数を揃える）
+        # 改行してよい「自然な区切り」の優先度
         if prev == " " or nxt == " ":
-            score -= 20                    # 空白（＝こちらが入れた自然な区切り）で切るのを最優先
+            score -= 20; natural = True    # 空白（＝こちらが入れた区切り）を最優先
         elif prev in "、。！？":
-            score -= 8                     # 句読点の直後
+            score -= 12; natural = True    # 句読点の直後
+        elif any(text[:i].endswith(e) for e in _CLAUSE_END):
+            score -= 11; natural = True    # 文節・節の切れ目（です/ます/けど/から…）＝意味のまとまり
         elif prev in _BREAK_AFTER:
-            score -= 4                     # 助詞の直後も自然
-        def _hira(c): return "ぁ" <= c <= "ゟ"
-        if _kata(prev) and _kata(nxt):
-            score += 15                    # カタカナ語の途中で割らない（ラファエッ｜ト を防ぐ）
-        elif _kanji(prev) and _kanji(nxt):
-            score += 5                     # 漢字熟語の途中も避ける
-        elif _hira(prev) and _hira(nxt) and prev not in "ねよわ":
-            score += 10                    # ひらがな語の途中も避ける（と｜ころ＝ところ を防ぐ）。漢字/カナの語頭で切る方が自然
-        if nxt in _BAD_LINE_HEAD or prev in "ーっ":
-            score += 8                     # 行頭に小書き等／長音・促音の直後で切るのは避ける（語中切れ防止）
-        if len(text[i:].strip()) <= 2 or len(text[:i].strip()) <= 1:
+            score -= 4;  natural = True    # 助詞の直後
+        else:
+            natural = False
+        # 単語境界が取れていない（フォールバック時）だけ、語の途中で割るペナルティを効かせる
+        if breaks is None and not natural:
+            if _kata(prev) and _kata(nxt):
+                score += 15
+            elif _kanji(prev) and _kanji(nxt):
+                score += 5
+            elif _hira(prev) and _hira(nxt):
+                score += 10
+        if nxt in _BAD_LINE_HEAD or prev in "ー":
+            score += 8                     # 行頭に小書き・長音等が来る改行は避ける（見た目）
+        la, lb = len(text[:i].strip()), len(text[i:].strip())
+        if max(la, lb) > LINE_CHARS_MAX:
+            score += (max(la, lb) - LINE_CHARS_MAX) * 2   # 1行が長すぎる改行を避ける（縦型は1行を短く）
+        if lb <= 1 or la <= 1:
             score += 6                     # 片方が極端に短い改行は避ける（孤立防止）
         if best is None or score < best[0]:
             best = (score, i)
