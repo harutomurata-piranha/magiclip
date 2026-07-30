@@ -11,6 +11,7 @@ AI編集エンジン（差し替え可能な層）。
 import os
 import re
 import json
+import time
 import difflib
 import subprocess
 from types import SimpleNamespace
@@ -18,6 +19,12 @@ from types import SimpleNamespace
 import app as E  # 既存の本物エンジン（関数を再利用。__main__ガードがあるのでサーバは起動しない）
 
 _FRAG = re.compile(r'^[぀-ゟ゠-ヿ]$')   # 単独かな1文字（断片）
+
+
+def log(msg):
+    """本番のログ（Renderのログ画面）に進捗を出す。
+    どの工程で時間がかかっているか・どこで失敗したかを追えるようにするため。"""
+    print(f"[MagiClip] {msg}", flush=True)
 
 
 def _stem(output_path):
@@ -33,11 +40,18 @@ def _transcribe_and_plan(input_path, stem):
     """文字起こし → AIで構成（見どころ選定）。再編集で使う素材も返す。"""
     audio = stem + "_audio.mp3"
     duration = E.get_video_duration(input_path)
+    log(f"素材 {duration:.1f}秒 → 音声を抽出")
     E.extract_audio(input_path, audio)
+    log("文字起こし中（Whisper）…")
+    t0 = time.time()
     transcript = E.transcribe_audio(audio)
     cleaned = E.clean_segments(transcript)
+    log(f"文字起こし完了 {time.time()-t0:.0f}秒 / セグメント{len(cleaned)}件")
+    log("編集構成を作成中（テキスト整形→残す/落とすの判断）…")
+    t0 = time.time()
     structure = E.generate_structure(cleaned, duration)
     scenes, bgm_mood = E.parse_scenes(structure, cleaned, duration)
+    log(f"編集構成 完了 {time.time()-t0:.0f}秒 / シーン{len(scenes)}件")
     words = [{"start": getattr(w, "start", None), "end": getattr(w, "end", None), "word": w.word}
              for w in transcript.words]
     return scenes, bgm_mood, words, cleaned, duration
@@ -464,6 +478,8 @@ def process_video(input_path, output_path, plan="free"):
     """
     stem = _stem(output_path)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    job_t0 = time.time()
+    log(f"=== 編集開始: {os.path.basename(input_path)} ===")
 
     scenes, bgm_mood, words, cleaned, duration = _transcribe_and_plan(input_path, stem)
 
@@ -473,9 +489,18 @@ def process_video(input_path, output_path, plan="free"):
 
     scenes = _tighten_scenes(scenes, words)      # 端の無音を発話まで詰める（テンポUP＋境界の単語切れ防止）
     cut_path = stem + "_cut.mp4"
+    log("映像をカット中（ffmpeg）…")
+    t0 = time.time()
     E.edit_video(input_path, scenes, cut_path)   # ここで scenes に out_start/out_end が付く
+    log(f"カット完了 {time.time()-t0:.0f}秒")
+    log("字幕を作成中…")
     subtitles = _build_subtitles(words, scenes, cleaned)
+    log(f"字幕 {len(subtitles)}件")
+    log("字幕の焼き込み・BGM・透かし（仕上げ）…")
+    t0 = time.time()
     _finalize(cut_path, subtitles, bgm_mood, stem, output_path)
+    log(f"仕上げ完了 {time.time()-t0:.0f}秒")
+    log(f"=== 完成: 合計{time.time()-job_t0:.0f}秒 ===")
 
     # プロ編集用に素材を保存（字幕テキスト修正・カット削除→再レンダリングに使う）
     _save_data(output_path, {

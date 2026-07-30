@@ -313,6 +313,10 @@ def create_app():
                 job.status = "完成"
                 job.output_path = out_path
             except Exception as e:
+                # 失敗の原因をログに残す（ユーザー向け文言だけでは原因が追えないため）
+                import traceback
+                print(f"[MagiClip] 編集失敗 job={job_id}: {type(e).__name__}: {e}", flush=True)
+                traceback.print_exc()
                 job.status = "エラー"
                 job.error = _friendly_error(e)
                 _refund_credit(job)   # 失敗したら消費した1本を返す
