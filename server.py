@@ -8,6 +8,7 @@ import os
 import json
 import uuid
 import threading
+from datetime import timedelta
 
 import app as engine          # AI編集エンジン（ヘルスチェックでクライアントを使う）
 import stripe
@@ -41,6 +42,10 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(config)
     app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_MB * 1024 * 1024
+    # ログイン状態を長く保つ（スマホでタブを離れても勝手にログアウトしないように）
+    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=30)
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+    app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
     os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(config.OUTPUT_FOLDER, exist_ok=True)
@@ -121,7 +126,7 @@ def create_app():
                 u.set_password(pw)
                 db.session.add(u)
                 db.session.commit()
-                login_user(u)
+                login_user(u, remember=True)   # ブラウザを閉じてもログインを保つ（勝手にログアウトしない）
                 flash(f"登録完了！お試しで{config.FREE_TRIAL_CREDITS}本まで無料です。", "ok")
                 return redirect(url_for("mypage"))
         return render_template("register.html")
@@ -135,7 +140,7 @@ def create_app():
             pw = request.form.get("password") or ""
             u = User.query.filter_by(email=email).first()
             if u and u.check_password(pw):
-                login_user(u)
+                login_user(u, remember=True)   # ブラウザを閉じてもログインを保つ（勝手にログアウトしない）
                 return redirect(url_for("mypage"))
             flash("メールアドレスまたはパスワードが違います。", "error")
         return render_template("login.html")

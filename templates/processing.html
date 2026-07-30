@@ -5,6 +5,9 @@
   <h1 id="title">魔法をかけています…</h1>
   <div class="spinner" id="spinner"></div>
   <p class="muted" id="msg">AIが見どころを探しています</p>
+  <p class="muted" id="note" style="font-size:13px">
+    このまま他のアプリを見ていて大丈夫です。戻ってくれば続きが表示されます。
+  </p>
   <div id="failbox" style="display:none">
     <a class="btn" href="{{ url_for('upload') }}">もう一度ためす</a>
     <p class="muted" style="font-size:13px;margin-top:10px">失敗した場合、消費した本数は自動で返却されます。</p>
@@ -15,24 +18,39 @@
 <script>
   const jobId = "{{ job.id }}";
   const msgs = ["AIが見どころを探しています", "テンポよくカットしています", "字幕をつけています", "仕上げています"];
-  let i = 0;
-  const ticker = setInterval(() => { document.getElementById('msg').textContent = msgs[i++ % msgs.length]; }, 2500);
+  let i = 0, ticker = null, timer = null, stopped = false;
+
   function fail(detail) {
-    clearInterval(ticker);
+    stopped = true;
+    clearInterval(ticker); clearTimeout(timer);
     document.getElementById('spinner').style.display = 'none';
+    document.getElementById('note').style.display = 'none';
     document.getElementById('title').textContent = 'うまくいきませんでした';
     document.getElementById('msg').textContent = detail || 'エラーが発生しました。もう一度お試しください。';
     document.getElementById('failbox').style.display = 'block';
   }
-  async function poll() {
+
+  // 進捗の確認。スマホは他アプリに移るとタブが凍結されタイマーが止まるため、
+  // 戻ってきた時に必ず即チェックして続きを表示する（編集処理はサーバで進み続けている）。
+  async function check() {
+    if (stopped) return;
     try {
-      const r = await fetch(`/status/${jobId}`);
+      const r = await fetch(`/status/${jobId}`, { cache: 'no-store' });
+      if (r.status === 401 || r.redirected) { location.reload(); return; }   // ログイン切れ等
       const d = await r.json();
-      if (d.status === '完成') { location.href = `/result/${jobId}`; return; }
+      if (d.status === '完成') { stopped = true; location.href = `/result/${jobId}`; return; }
       if (d.status === 'エラー') { fail(d.error); return; }
-    } catch (e) {}
-    setTimeout(poll, 2000);
+    } catch (e) { /* 一時的な通信断でも諦めず次の確認を続ける */ }
+    clearTimeout(timer);
+    timer = setTimeout(check, 3000);
   }
-  poll();
+
+  // 復帰時のトリガー（凍結から戻った瞬間に追いつく）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+  window.addEventListener('pageshow', check);
+
+  ticker = setInterval(() => { document.getElementById('msg').textContent = msgs[i++ % msgs.length]; }, 2500);
+  check();
 </script>
 {% endblock %}
