@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./Dockerfile
     region: singapore        # 日本から最も近いリージョン
     plan: free               # まず無料で試す（512MB・一定時間で休止あり。重い処理はstarter以上推奨）
-    healthCheckPath: /
+    healthCheckPath: /healthz   # パスワードゲートで/が401になるため、AI呼び出しなしで200を返す専用パスを使う
     envVars:
       - key: OPENAI_API_KEY      # Whisper（文字起こし）用。Renderダッシュボードで値を設定
         sync: false

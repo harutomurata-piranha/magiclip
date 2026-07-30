@@ -69,7 +69,7 @@ def create_app():
         pw = config.ACCESS_PASSWORD
         if not pw:
             return  # 未設定＝鍵なし（ローカル開発）
-        if request.path == "/health" or request.path.startswith("/webhook/"):
+        if request.path in ("/health", "/healthz") or request.path.startswith("/webhook/"):
             return
         auth = request.authorization
         if auth and auth.password == pw and (not config.ACCESS_USER or auth.username == config.ACCESS_USER):
@@ -89,6 +89,11 @@ def create_app():
         return render_template("index.html")
 
     # ---------------- ヘルスチェック（AIが使える状態かを確認）----------------
+    @app.route("/healthz")
+    def healthz():
+        # Renderのヘルスチェック用。AI呼び出しなしで即200を返す（頻繁に叩かれるため軽量に）
+        return "ok", 200
+
     @app.route("/health")
     def health():
         try:

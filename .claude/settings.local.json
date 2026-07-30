@@ -87,7 +87,14 @@
       "Bash(git stash *)",
       "Bash(echo \"業務サーバ\\(5050\\): $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5050/ 2>/dev/null || echo 000\\) → 停止しました\")",
       "Bash(claude --version)",
-      "Bash(python3 -c \"import json; d=json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('JSON OK'\\); print\\('sandbox:', json.dumps\\(d['sandbox'], ensure_ascii=False\\)\\)\")"
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('JSON OK'\\); print\\('sandbox:', json.dumps\\(d['sandbox'], ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import secrets; print\\('SECRET_KEY =', secrets.token_hex\\(32\\)\\)\")",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__switch_browser",
+      "mcp__claude-in-chrome__navigate",
+      "mcp__claude-in-chrome__computer",
+      "Bash(git fetch *)",
+      "mcp__claude-in-chrome__tabs_create_mcp"
     ]
   },
   "sandbox": {
