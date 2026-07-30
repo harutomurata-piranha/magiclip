@@ -1,20 +1,25 @@
-# MagiClip - 動画AI編集ツール
-FROM python:3.11-slim
+# MagiClip 本番用イメージ（マネージドPaaS / Render・Railway・Fly.io 等で共通に使える）
+FROM python:3.12-slim
 
-# ffmpeg（動画編集）と 日本語フォント（字幕用 Noto CJK）をインストール
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        fonts-noto-cjk \
+# 動画処理に ffmpeg / ffprobe が必須。フォント(fonts/)とjanomeはリポジトリ/依存に同梱済み
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# 依存を先に入れてビルドキャッシュを効かせる
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# アプリ本体（fonts/ bgm/ テンプレ等を含む。.dockerignore で不要物は除外）
 COPY . .
 
-# 字幕に使う日本語フォント（Linux: Noto CJK）
-ENV SUBTITLE_FONT=/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc
-# Renderが渡す $PORT で待ち受ける。ジョブはメモリ共有が必要なため worker は1つ、同時アクセスは threads で捌く
-CMD gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 600
+ENV APP_ENV=production \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# PaaS は $PORT を渡してくる（無ければ8080）。動画生成はバックグラウンドスレッドで走るので
+# ワーカー1・スレッド複数・タイムアウト長めが安全。
+EXPOSE 8080
+CMD ["sh", "-c", "gunicorn server:app --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 4 --timeout 180"]

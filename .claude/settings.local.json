@@ -82,7 +82,29 @@
       "Bash(pip install *)",
       "Bash(python3 -c \"from janome.tokenizer import Tokenizer; t=Tokenizer\\(\\); print\\([tok.surface for tok in t.tokenize\\('5切るから飲めるところなんで結構いいですね'\\)]\\)\")",
       "Bash(python3 -m pip install janome)",
-      "Bash(python3 -c \"import urllib.request,json; print\\('health:', json.load\\(urllib.request.urlopen\\('http://127.0.0.1:5050/health'\\)\\)\\)\")"
+      "Bash(python3 -c \"import urllib.request,json; print\\('health:', json.load\\(urllib.request.urlopen\\('http://127.0.0.1:5050/health'\\)\\)\\)\")",
+      "Bash(ffmpeg -y -i outputs/reflect_test.mp4 -vf scale=540:-2 -c:v libx264 -crf 30 -preset veryfast -c:a aac -b:a 96k /tmp/reflect_preview.mp4 -loglevel error)",
+      "Bash(git stash *)",
+      "Bash(echo \"業務サーバ\\(5050\\): $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5050/ 2>/dev/null || echo 000\\) → 停止しました\")",
+      "Bash(claude --version)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('JSON OK'\\); print\\('sandbox:', json.dumps\\(d['sandbox'], ensure_ascii=False\\)\\)\")"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": [
+        "api.openai.com",
+        "api.anthropic.com",
+        "127.0.0.1",
+        "localhost"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        "/tmp",
+        "/private/tmp"
+      ]
+    }
   }
 }

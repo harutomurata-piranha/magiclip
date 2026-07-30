@@ -1,0 +1,28 @@
+# イメージに入れないもの（秘密情報・巨大メディア・ローカル生成物）
+.git
+.gitignore
+__pycache__/
+*.pyc
+.claude/
+scratchpad/
+
+# 秘密情報は必ず除外（本番はPaaSの環境変数で渡す）
+.env
+.env.*
+
+# ローカルの入出力・DB（本番はコンテナ内で生成。永続化は別途）
+outputs/
+uploads/
+*.db
+*.sqlite
+
+# サンプル/巨大メディア（bgm/*.mp3 と fonts/*.ttf は必要なので除外しない）
+*.mov
+*.MOV
+*.mp4
+*.MP4
+
+# エディタ等
+.DS_Store
+.vscode/
+.idea/

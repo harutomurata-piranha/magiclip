@@ -12,7 +12,7 @@ import threading
 import app as engine          # AI編集エンジン（ヘルスチェックでクライアントを使う）
 import stripe
 from flask import (Flask, render_template, request, redirect, url_for, flash,
-                   jsonify, send_file, abort)
+                   jsonify, send_file, abort, Response)
 from flask_login import (LoginManager, login_user, logout_user, login_required,
                          current_user)
 from werkzeug.utils import secure_filename
@@ -59,6 +59,24 @@ def create_app():
 
     if config.stripe_enabled:
         stripe.api_key = config.STRIPE_SECRET_KEY
+
+    # ---------------- 限定公開ゲート（パスワードで“鍵”をかける）----------------
+    # ACCESS_PASSWORD が設定されている時だけ、サイト全体にBasic認証をかける。
+    # スマホ/PCのブラウザが標準のパスワード入力を出すので、知っている人だけ入れる。
+    # 監視用 /health と Stripe の webhook は、外部が認証を送れないため除外する。
+    @app.before_request
+    def _limited_access_gate():
+        pw = config.ACCESS_PASSWORD
+        if not pw:
+            return  # 未設定＝鍵なし（ローカル開発）
+        if request.path == "/health" or request.path.startswith("/webhook/"):
+            return
+        auth = request.authorization
+        if auth and auth.password == pw and (not config.ACCESS_USER or auth.username == config.ACCESS_USER):
+            return
+        return Response(
+            "MagiClip は限定公開中です。ユーザー名とパスワードを入力してください。",
+            401, {"WWW-Authenticate": 'Basic realm="MagiClip (genteikoukai)"'})
 
     # 全テンプレに渡す共通情報
     @app.context_processor

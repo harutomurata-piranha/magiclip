@@ -38,6 +38,11 @@ class Config:
     NO_LIMIT = _bool("NO_LIMIT", default=IS_DEV)
     FREE_TRIAL_CREDITS = int(os.getenv("FREE_TRIAL_CREDITS", "3"))
 
+    # 限定公開：ACCESS_PASSWORD を設定すると、サイト全体にパスワード（Basic認証）がかかる。
+    # 未設定なら誰でも閲覧可（ローカル開発はこちら）。知人限定デモ等はこれで“鍵”をかける。
+    ACCESS_USER = os.getenv("ACCESS_USER", "guest")
+    ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "")
+
     # 料金（円）
     PRICE_PAYG_JPY = int(os.getenv("PRICE_PAYG_JPY", "100"))      # 従量課金：1本100円
     PRICE_MONTHLY_JPY = int(os.getenv("PRICE_MONTHLY_JPY", "1980"))  # 月額プラン
