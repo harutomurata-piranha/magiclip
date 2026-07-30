@@ -12,8 +12,9 @@ instance/
 uploads/
 outputs/
 frames/
-bgm/*.mp3
 server.log
+# ※bgm/*.mp3 は追跡する（本番Dockerイメージに同梱しないとBGMが付かない。
+#   音源はPixabay License＝商用可・クレジット表記不要で再配布可）
 
 # ルート直下のメディア／生成物（大きい・一時的）
 *.MOV

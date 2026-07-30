@@ -80,11 +80,17 @@ def _finalize(cut_path, subtitles, bgm_mood, stem, output_path, font_key=None):
     font_choice = E.font_by_key(font_key, bgm_mood)
     E.create_srt(subtitles, srt)
     E.burn_subtitles(cut_path, subtitles, subtitled, font_choice)
-    bgm_path, _ = E.get_bgm(bgm_mood)
+    bgm_path, bgm_name = E.get_bgm(bgm_mood)
     if bgm_path and E.mix_bgm(subtitled, bgm_path, output_path):
+        log(f"BGM: {bgm_name}（mood='{bgm_mood}'）をミックス")
         if os.path.exists(subtitled):
             os.remove(subtitled)
     else:
+        # BGMが無い/ミックス失敗は静かにスキップされるため、原因が分かるようログに出す
+        if not bgm_path:
+            log(f"BGMなし: bgm/ に音源が見つかりません（mood='{bgm_mood}'）")
+        else:
+            log(f"BGMミックス失敗: {bgm_path}")
         os.replace(subtitled, output_path)
     # 透かし「✦ MagiClip」を右下に焼き込む（仕上げ）
     wm = stem + "_wm_final.mp4"
