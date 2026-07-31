@@ -57,6 +57,27 @@ def _add_missing_columns():
                 print(f"[MagiClip] DB: job.{name} の追加に失敗: {e}", flush=True)
 
 
+def _seed_account():
+    """検証用アカウントを起動時に用意する（無ければ作成、あればパスワードと本数を揃える）。
+    本番はDBが揮発性で再デプロイのたびに登録が消えるため、これで検証アカウントを常に同一に保つ。
+    SEED_ACCOUNT_EMAIL / SEED_ACCOUNT_PASSWORD が未設定なら何もしない。"""
+    email = (config.SEED_EMAIL or "").strip().lower()
+    if not email or not config.SEED_PASSWORD:
+        return
+    try:
+        u = User.query.filter_by(email=email).first()
+        if not u:
+            u = User(email=email, plan="free")
+            db.session.add(u)
+        u.set_password(config.SEED_PASSWORD)
+        if (u.credits or 0) < config.SEED_CREDITS:   # 検証中に尽きないよう補充
+            u.credits = config.SEED_CREDITS
+        db.session.commit()
+        print(f"[MagiClip] 検証アカウントを用意しました: {email}（残り{u.credits}本）", flush=True)
+    except Exception as e:
+        print(f"[MagiClip] 検証アカウントの用意に失敗: {e}", flush=True)
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(config)
@@ -73,6 +94,7 @@ def create_app():
     with app.app_context():
         db.create_all()
         _add_missing_columns()   # 既存DBに後から増えた列を足す（進捗表示など）
+        _seed_account()          # 検証用アカウントを常に同じ状態で用意する
 
     login_manager = LoginManager(app)
     login_manager.login_view = "login"

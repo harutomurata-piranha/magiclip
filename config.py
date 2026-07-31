@@ -43,6 +43,12 @@ class Config:
     ACCESS_USER = os.getenv("ACCESS_USER", "guest")
     ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "")
 
+    # 検証用アカウント：起動時に自動で用意する（本番はDBが揮発性で、再デプロイのたびに
+    # 登録が消えるため。これで「毎回同じアカウントで検証」できる）。未設定なら何もしない。
+    SEED_EMAIL = os.getenv("SEED_ACCOUNT_EMAIL", "")
+    SEED_PASSWORD = os.getenv("SEED_ACCOUNT_PASSWORD", "")
+    SEED_CREDITS = int(os.getenv("SEED_ACCOUNT_CREDITS", "50"))
+
     # 料金（円）
     PRICE_PAYG_JPY = int(os.getenv("PRICE_PAYG_JPY", "100"))      # 従量課金：1本100円
     PRICE_MONTHLY_JPY = int(os.getenv("PRICE_MONTHLY_JPY", "1980"))  # 月額プラン

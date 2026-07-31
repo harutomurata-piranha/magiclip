@@ -96,7 +96,11 @@
       "Bash(git fetch *)",
       "mcp__claude-in-chrome__tabs_create_mcp",
       "Bash(export PYTHONDONTWRITEBYTECODE=1)",
-      "Bash(python3 -m py_compile app.py server.py video_processor.py models.py)"
+      "Bash(python3 -m py_compile app.py server.py video_processor.py models.py)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/)",
+      "Bash(echo \"  / \\(401=限定公開\\):  $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/\\)\")",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz)",
+      "Bash(echo \"  /healthz:          $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz\\)\")"
     ]
   },
   "sandbox": {
