@@ -27,6 +27,24 @@ def log(msg):
     print(f"[MagiClip] {msg}", flush=True)
 
 
+# 各工程が全体のどれくらいを占めるか（実測ベース）。「あとどれくらい？」を出すのに使う。
+# 動画の長さに比例して伸びるのは主に「文字起こし」と「カット/仕上げ(ffmpeg)」。
+STEP_WEIGHTS = [
+    ("音声を取り出しています", 0.05),
+    ("話している内容を聞き取っています", 0.25),
+    ("どこを残すか考えています", 0.20),
+    ("テンポよくカットしています", 0.25),
+    ("字幕をつけています", 0.10),
+    ("仕上げています（BGM・書体）", 0.15),
+]
+
+
+def _estimate_total_sec(duration):
+    """完成までのおおよその所要時間（秒）。動画の長さから見積もる。
+    実測: 2分弱の動画で約2〜3分。素材が長いほど比例して伸びる（+固定のAI待ち）。"""
+    return int(40 + (duration or 60) * 1.4)
+
+
 def _stem(output_path):
     return os.path.splitext(output_path)[0]
 
@@ -36,18 +54,24 @@ def _data_path(output_path):
 
 
 # ---------------- パイプラインの部品 ----------------
-def _transcribe_and_plan(input_path, stem):
+def _transcribe_and_plan(input_path, stem, report=None):
     """文字起こし → AIで構成（見どころ選定）。再編集で使う素材も返す。"""
     audio = stem + "_audio.mp3"
     duration = E.get_video_duration(input_path)
     log(f"素材 {duration:.1f}秒 → 音声を抽出")
+    if report:
+        report(0, duration)          # 工程0: 音声を取り出す（全体の見積りもここで確定）
     E.extract_audio(input_path, audio)
     log("文字起こし中（Whisper）…")
+    if report:
+        report(1)
     t0 = time.time()
     transcript = E.transcribe_audio(audio)
     cleaned = E.clean_segments(transcript)
     log(f"文字起こし完了 {time.time()-t0:.0f}秒 / セグメント{len(cleaned)}件")
     log("編集構成を作成中（テキスト整形→残す/落とすの判断）…")
+    if report:
+        report(2)
     t0 = time.time()
     structure = E.generate_structure(cleaned, duration)
     scenes, bgm_mood = E.parse_scenes(structure, cleaned, duration)
@@ -477,17 +501,42 @@ def _tighten_scenes(scenes, words, pad=0.12, min_trim=0.25):
 
 
 # ---------------- 公開API ----------------
-def process_video(input_path, output_path, plan="free"):
+def process_video(input_path, output_path, plan="free", on_progress=None):
     """全自動編集（一般プラン）。完成動画を output_path に書き出す。
 
     プロプランでも同じ完成品を出しつつ、後で字幕/カットを修正できるよう素材を保存する。
+    on_progress(percent, step_label, eta_sec) を渡すと進捗を通知する（画面の「あと何分」表示用）。
     """
     stem = _stem(output_path)
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     job_t0 = time.time()
     log(f"=== 編集開始: {os.path.basename(input_path)} ===")
 
-    scenes, bgm_mood, words, cleaned, duration = _transcribe_and_plan(input_path, stem)
+    state = {"total": None}
+
+    def report(step_index, duration=None):
+        """工程の開始を進捗として通知する（%は各工程の重みの累積、残り時間は経過との差）。"""
+        if duration is not None:
+            state["total"] = _estimate_total_sec(duration)
+        done = sum(w for _, w in STEP_WEIGHTS[:step_index])
+        percent = int(done * 100)
+        label = STEP_WEIGHTS[step_index][0]
+        eta = None
+        if state["total"]:
+            # 残りの見積もり：経過ペースからの予測と、動画長からの初期見積りを併用する。
+            # 序盤は経過ペースが当てにならず短く出すぎるため、初期見積りの方を尊重する（残り時間を短く言わない）。
+            elapsed = time.time() - job_t0
+            by_total = state["total"] * (1 - done)                 # 初期見積りベース
+            by_pace = (elapsed / done - elapsed) if done > 0.05 else by_total
+            eta = max(5, int(max(by_total, by_pace) if done < 0.5 else (by_total + by_pace) / 2))
+        log(f"進捗 {percent}% / {label}" + (f" / 残り約{eta}秒" if eta else ""))
+        if on_progress:
+            try:
+                on_progress(percent, label, eta)
+            except Exception:
+                pass      # 進捗通知の失敗で編集を止めない
+
+    scenes, bgm_mood, words, cleaned, duration = _transcribe_and_plan(input_path, stem, report)
 
     # シーンが取れなかったら「失敗」として扱う（黙って未編集の素材を完成扱いにしない）
     if not scenes:
@@ -496,17 +545,25 @@ def process_video(input_path, output_path, plan="free"):
     scenes = _tighten_scenes(scenes, words)      # 端の無音を発話まで詰める（テンポUP＋境界の単語切れ防止）
     cut_path = stem + "_cut.mp4"
     log("映像をカット中（ffmpeg）…")
+    report(3)
     t0 = time.time()
     E.edit_video(input_path, scenes, cut_path)   # ここで scenes に out_start/out_end が付く
     log(f"カット完了 {time.time()-t0:.0f}秒")
     log("字幕を作成中…")
+    report(4)
     subtitles = _build_subtitles(words, scenes, cleaned)
     log(f"字幕 {len(subtitles)}件")
     log("字幕の焼き込み・BGM・透かし（仕上げ）…")
+    report(5)
     t0 = time.time()
     _finalize(cut_path, subtitles, bgm_mood, stem, output_path)
     log(f"仕上げ完了 {time.time()-t0:.0f}秒")
     log(f"=== 完成: 合計{time.time()-job_t0:.0f}秒 ===")
+    if on_progress:
+        try:
+            on_progress(100, "完成しました", 0)
+        except Exception:
+            pass
 
     # プロ編集用に素材を保存（字幕テキスト修正・カット削除→再レンダリングに使う）
     _save_data(output_path, {

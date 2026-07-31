@@ -71,6 +71,10 @@ class Job(db.Model):
     status = db.Column(db.String(20), default="待機中")        # 待機中/処理中/完成/エラー
     mode = db.Column(db.String(10), default="auto")            # auto=一般(全自動) / pro=プロ(編集可)
     error = db.Column(db.String(300))                          # エラー時の理由（ユーザー向け文言）
+    # 進捗表示用（「あとどれくらい？」に答えるため）
+    progress = db.Column(db.Integer, default=0)                # 0-100
+    step = db.Column(db.String(60))                            # いまの工程（ユーザー向け文言）
+    eta_sec = db.Column(db.Integer)                            # 残り時間の目安（秒）
     output_path = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

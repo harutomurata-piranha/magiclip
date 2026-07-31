@@ -38,6 +38,25 @@ def _friendly_error(e):
     return "編集に失敗しました。もう一度お試しください。"
 
 
+def _add_missing_columns():
+    """既存DBに、あとから追加した列（進捗表示用など）を足す簡易マイグレーション。
+    db.create_all() は既存テーブルに列を追加しないため、無いものだけALTERする。"""
+    from sqlalchemy import inspect, text
+    want = {"progress": "INTEGER DEFAULT 0", "step": "VARCHAR(60)", "eta_sec": "INTEGER"}
+    try:
+        have = {c["name"] for c in inspect(db.engine).get_columns("job")}
+    except Exception:
+        return                       # テーブルが無い等（create_allが作るので何もしない）
+    for name, ddl in want.items():
+        if name not in have:
+            try:
+                db.session.execute(text(f"ALTER TABLE job ADD COLUMN {name} {ddl}"))
+                db.session.commit()
+                print(f"[MagiClip] DB: job.{name} を追加しました", flush=True)
+            except Exception as e:
+                print(f"[MagiClip] DB: job.{name} の追加に失敗: {e}", flush=True)
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(config)
@@ -53,6 +72,7 @@ def create_app():
     db.init_app(app)
     with app.app_context():
         db.create_all()
+        _add_missing_columns()   # 既存DBに後から増えた列を足す（進捗表示など）
 
     login_manager = LoginManager(app)
     login_manager.login_view = "login"
@@ -312,16 +332,28 @@ def create_app():
             job = db.session.get(Job, job_id)
             job.status = "処理中"
             job.error = None
+            job.progress, job.step, job.eta_sec = 0, "準備しています", None
             db.session.commit()
+
+            def on_progress(percent, step, eta_sec):
+                # 進捗をDBに保存 → /status 経由で画面の「あと何分」表示に使う
+                j = db.session.get(Job, job_id)
+                if j:
+                    j.progress, j.step, j.eta_sec = percent, step, eta_sec
+                    db.session.commit()
+
             try:
-                process_video(in_path, out_path, plan)
+                process_video(in_path, out_path, plan, on_progress=on_progress)
+                job = db.session.get(Job, job_id)   # 進捗更新で作り直されている可能性に備えて取り直す
                 job.status = "完成"
+                job.progress, job.step, job.eta_sec = 100, "完成しました", 0
                 job.output_path = out_path
             except Exception as e:
                 # 失敗の原因をログに残す（ユーザー向け文言だけでは原因が追えないため）
                 import traceback
                 print(f"[MagiClip] 編集失敗 job={job_id}: {type(e).__name__}: {e}", flush=True)
                 traceback.print_exc()
+                job = db.session.get(Job, job_id)   # 進捗更新でセッションが変わっている可能性に備える
                 job.status = "エラー"
                 job.error = _friendly_error(e)
                 _refund_credit(job)   # 失敗したら消費した1本を返す
@@ -346,7 +378,9 @@ def create_app():
     @login_required
     def status(job_id):
         job = _owned_job(job_id)
-        return jsonify({"status": job.status, "error": job.error})
+        return jsonify({"status": job.status, "error": job.error,
+                        "progress": job.progress or 0, "step": job.step,
+                        "eta_sec": job.eta_sec})
 
     # ---------------- 完成（プレビュー / ダウンロード）----------------
     @app.route("/result/<job_id>")

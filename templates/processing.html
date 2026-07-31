@@ -3,8 +3,11 @@
 {% block content %}
 <div class="panelbox">
   <h1 id="title">魔法をかけています…</h1>
-  <div class="spinner" id="spinner"></div>
-  <p class="muted" id="msg">AIが見どころを探しています</p>
+
+  <div class="prog"><div class="prog-bar" id="bar" style="width:0%"></div></div>
+  <p class="prog-pct"><span id="pct">0</span>%<span id="eta" class="muted"></span></p>
+
+  <p class="muted" id="msg">準備しています</p>
   <p class="muted" id="note" style="font-size:13px">
     このまま他のアプリを見ていて大丈夫です。戻ってくれば続きが表示されます。
   </p>
@@ -17,40 +20,61 @@
 {% block scripts %}
 <script>
   const jobId = "{{ job.id }}";
-  const msgs = ["AIが見どころを探しています", "テンポよくカットしています", "字幕をつけています", "仕上げています"];
-  let i = 0, ticker = null, timer = null, stopped = false;
+  let timer = null, stopped = false, shown = 0, etaSec = null, etaAt = null;
 
   function fail(detail) {
     stopped = true;
-    clearInterval(ticker); clearTimeout(timer);
-    document.getElementById('spinner').style.display = 'none';
+    clearTimeout(timer);
+    document.querySelector('.prog').style.display = 'none';
+    document.querySelector('.prog-pct').style.display = 'none';
     document.getElementById('note').style.display = 'none';
     document.getElementById('title').textContent = 'うまくいきませんでした';
     document.getElementById('msg').textContent = detail || 'エラーが発生しました。もう一度お試しください。';
     document.getElementById('failbox').style.display = 'block';
   }
 
-  // 進捗の確認。スマホは他アプリに移るとタブが凍結されタイマーが止まるため、
-  // 戻ってきた時に必ず即チェックして続きを表示する（編集処理はサーバで進み続けている）。
+  function fmt(sec) {
+    if (sec == null) return '';
+    if (sec <= 10) return '　もうすぐ完成します';
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m > 0 ? `　残り約${m}分${s >= 30 ? '30秒' : ''}` : `　残り約${sec}秒`;
+  }
+
+  // 表示は滑らかに進める（工程が切り替わるまで数字が止まって見えないように）
+  function paint() {
+    document.getElementById('bar').style.width = shown + '%';
+    document.getElementById('pct').textContent = Math.floor(shown);
+    let left = etaSec;
+    if (left != null && etaAt) left = Math.max(0, etaSec - Math.round((Date.now() - etaAt) / 1000));
+    document.getElementById('eta').textContent = fmt(left);
+  }
+  setInterval(() => {                      // 進捗の間も少しずつ進めて「止まって見える」のを防ぐ
+    if (stopped) return;
+    if (shown < 99) { shown += 0.15; paint(); }
+  }, 1000);
+
   async function check() {
     if (stopped) return;
     try {
       const r = await fetch(`/status/${jobId}`, { cache: 'no-store' });
-      if (r.status === 401 || r.redirected) { location.reload(); return; }   // ログイン切れ等
+      if (r.status === 401 || r.redirected) { location.reload(); return; }
       const d = await r.json();
       if (d.status === '完成') { stopped = true; location.href = `/result/${jobId}`; return; }
       if (d.status === 'エラー') { fail(d.error); return; }
-    } catch (e) { /* 一時的な通信断でも諦めず次の確認を続ける */ }
+      if (typeof d.progress === 'number' && d.progress > shown) shown = d.progress;  // 実測が来たら追いつく
+      if (d.step) document.getElementById('msg').textContent = d.step;
+      if (d.eta_sec != null) { etaSec = d.eta_sec; etaAt = Date.now(); }
+      paint();
+    } catch (e) { /* 一時的な通信断でも諦めず続ける */ }
     clearTimeout(timer);
     timer = setTimeout(check, 3000);
   }
 
-  // 復帰時のトリガー（凍結から戻った瞬間に追いつく）
+  // スマホは他アプリに移るとタブが凍結されるため、戻った時に即チェックして追いつく
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
   window.addEventListener('focus', check);
   window.addEventListener('pageshow', check);
 
-  ticker = setInterval(() => { document.getElementById('msg').textContent = msgs[i++ % msgs.length]; }, 2500);
   check();
 </script>
 {% endblock %}

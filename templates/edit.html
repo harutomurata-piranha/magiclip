@@ -5,8 +5,8 @@
 <p class="muted">AIが選んだシーン（✅）と選ばなかったシーンを、字幕とサムネイルで一覧表示しています。
 <b>チェックで採用/カット</b>、<b>字幕の文字を直すと字幕が直り、文字を消した分だけ映像も短くなります</b>（行を空にすればそのシーンごとカット）。</p>
 
-<div style="display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start">
-  <div>
+<div class="editlayout">
+  <div class="editpreview">
     <video src="{{ url_for('video', job_id=job.id) }}?v={{ scenes|length }}" controls muted playsinline></video>
     <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
   </div>
@@ -45,6 +45,8 @@
 {% endblock %}
 {% block scripts %}
 <style>
+  /* PC: プレビュー(左) ＋ 字幕リスト(右)。スマホ: 縦積み（字幕リストを全幅で読める） */
+  .editlayout{display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start}
   .fontpick{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
             padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
   .fontpick label{font-size:13px;font-weight:600;white-space:nowrap}
@@ -61,9 +63,27 @@
   .scene-row .t{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;margin-bottom:5px}
   .scene-row .aitag{color:#b9a9ff;border:1px solid #b9a9ff55;border-radius:6px;padding:0 6px;font-size:10px;margin-left:4px}
   .scene-row .stxt{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
-                   border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;line-height:1.5;resize:vertical}
+                   border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;line-height:1.5;
+                   resize:none;overflow:hidden}   /* 高さは内容に合わせて自動（全文を隠さない）*/
   .scene-row .stxt:focus{outline:none;border-color:var(--brand)}
   .scene-row.off{opacity:.5}
+
+  /* スマホ〜タブレット: プレビューは「確認専用」、字幕リストは全幅で読める・押せる（ISSUE-001）
+     ※900px未満で1カラム化（768pxで2カラムだと横スクロールが出るため）*/
+  @media(max-width:900px){
+    .editlayout{grid-template-columns:1fr;gap:14px}
+    .editpreview video{max-width:100%;max-height:42vh}   /* 確認できる大きさに留め、リストの場所を確保 */
+    .scene-list{max-height:none;padding:2px}             /* 内側スクロールをやめページごと送る */
+
+    /* 字幕を主役に：1行目に[チェック][サムネ][時刻]、2行目に字幕を“全幅”で置く */
+    .scene-row{display:grid;grid-template-columns:auto auto 1fr;grid-template-areas:"cb th t" "tx tx tx";
+               align-items:center;column-gap:10px;row-gap:8px;padding:12px 8px}
+    .scene-row .cb{grid-area:cb;width:26px;height:26px;margin:0}    /* 指で押しやすい */
+    .scene-row .thumb{grid-area:th;width:44px;height:78px}
+    .scene-row .meta{display:contents}                              /* 中の時刻/字幕を上のグリッドに配置 */
+    .scene-row .t{grid-area:t;font-size:12px;margin:0}
+    .scene-row .stxt{grid-area:tx;font-size:16px;line-height:1.6;padding:10px}  /* 16px＝iOS自動ズーム回避 */
+  }
 </style>
 <script>
   const list = document.getElementById('sceneList');
@@ -71,6 +91,11 @@
     const on = row.querySelector('.cb').checked;
     row.classList.toggle('on', on);
     row.classList.toggle('off', !on);
+  }
+  // 字幕は全文が見えている必要がある（内側スクロールで隠れると読めない・直せない）
+  function fit(txt) {
+    txt.style.height = 'auto';
+    txt.style.height = (txt.scrollHeight + 2) + 'px';
   }
   list.querySelectorAll('.scene-row').forEach(row => {
     const cb = row.querySelector('.cb');
@@ -80,10 +105,13 @@
     txt.addEventListener('input', () => {
       if (!txt.value.trim()) { cb.checked = false; }
       else if (!cb.checked && document.activeElement === txt) { cb.checked = true; }
+      fit(txt);
       paint(row);
     });
+    fit(txt);
     paint(row);
   });
+  window.addEventListener('resize', () => list.querySelectorAll('.stxt').forEach(fit));
   document.querySelector('form').addEventListener('submit', () => {
     const out = [];
     list.querySelectorAll('.scene-row').forEach(row => {

@@ -6,7 +6,7 @@ import subprocess
 import json
 import re
 import difflib
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import shutil
 import openai
 import anthropic
@@ -930,6 +930,23 @@ def render_subtitle_png(text, w, h, path, font_choice=None):
     lines = wrap_text(text, font, int(w * 0.90), draw)
     line_height = font_size + 12
     start_y = h - 140 - line_height * len(lines)
+
+    # 明るい背景でも読めるように、文字の下に“やわらかい影”を敷く。
+    # 黒帯を置くと画が隠れて重くなるため、テキスト形状のぼかし影で背景の明度に依存させない。
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow)
+    y = start_y
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        x = (w - (bbox[2] - bbox[0])) // 2
+        try:
+            sdraw.text((x, y), line, font=font, fill=(0, 0, 0, 210),
+                       stroke_width=stroke + 4, stroke_fill=(0, 0, 0, 210))
+        except TypeError:
+            sdraw.text((x, y), line, font=font, fill=(0, 0, 0, 210))
+        y += line_height
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(7)))
+
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         x = (w - (bbox[2] - bbox[0])) // 2

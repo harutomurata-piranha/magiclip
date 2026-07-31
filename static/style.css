@@ -90,6 +90,13 @@ th{color:var(--muted);font-weight:600}
 .spinner{width:54px;height:54px;border:5px solid var(--line);border-top-color:var(--brand);
   border-radius:50%;animation:spin 1s linear infinite;margin:24px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* 進捗バー（「あとどれくらい？」に答える。装飾は最小限）*/
+.prog{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:999px;
+  overflow:hidden;margin:26px 0 10px}
+.prog-bar{height:100%;width:0;border-radius:999px;
+  background:linear-gradient(90deg,var(--brand),var(--brand2));transition:width .6s ease}
+.prog-pct{font-size:15px;font-weight:700;margin:0 0 6px}
+.prog-pct .muted{font-weight:500;font-size:14px}
 video{width:100%;max-width:340px;border-radius:14px;margin:18px auto;display:block;background:#000}
 .center{text-align:center}
 .muted{color:var(--muted)}

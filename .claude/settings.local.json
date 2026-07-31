@@ -94,7 +94,9 @@
       "mcp__claude-in-chrome__navigate",
       "mcp__claude-in-chrome__computer",
       "Bash(git fetch *)",
-      "mcp__claude-in-chrome__tabs_create_mcp"
+      "mcp__claude-in-chrome__tabs_create_mcp",
+      "Bash(export PYTHONDONTWRITEBYTECODE=1)",
+      "Bash(python3 -m py_compile app.py server.py video_processor.py models.py)"
     ]
   },
   "sandbox": {
