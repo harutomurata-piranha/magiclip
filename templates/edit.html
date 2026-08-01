@@ -1,88 +1,104 @@
 {% extends "base.html" %}
-{% block title %}シーンを編集 - MagiClip{% endblock %}
+{% block title %}文字で直す - MagiClip{% endblock %}
+{% block body_class %}theme-light{% endblock %}
 {% block content %}
-<h1>AIの編集を直す ✨</h1>
-<p class="muted">AIが選んだシーン（✅）と選ばなかったシーンを、字幕とサムネイルで一覧表示しています。
-<b>チェックで採用/カット</b>、<b>字幕の文字を直すと字幕が直り、文字を消した分だけ映像も短くなります</b>（行を空にすればそのシーンごとカット）。</p>
+<div class="edit">
+  <h1 class="edit-title">文字で直す</h1>
+  <p class="edit-hint">文字を消すと、その場面の映像も消えます。</p>
 
-<div class="editlayout">
-  <div class="editpreview">
-    <video src="{{ url_for('video', job_id=job.id) }}?v={{ scenes|length }}" controls muted playsinline></video>
-    <p class="center"><a class="muted" href="{{ url_for('result', job_id=job.id) }}">← 完成画面に戻る</a></p>
-  </div>
-
-  <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="panelbox" style="text-align:left">
-    <input type="hidden" name="scenes_json" id="scenes_json">
-
-    <div class="fontpick">
-      <label for="font">字幕の書体</label>
-      <select name="font" id="font">
-        {% for key, label in font_opts %}
-        <option value="{{ key }}" {% if key == cur_font %}selected{% endif %}>
-          {{ label }}{% if key == 'auto' %}（いまは「{{ ai_font }}」）{% endif %}
-        </option>
-        {% endfor %}
-      </select>
-      <span class="muted" style="font-size:12px">書体で映像の雰囲気が変わります。迷ったら「AIにおまかせ」</span>
+  <div class="editlayout">
+    {# プレビューは確認専用。編集はすべて文字側で行う（署名2: 文字がタイムライン） #}
+    <div class="editpreview">
+      <video src="{{ url_for('video', job_id=job.id) }}?v={{ scenes|length }}" controls muted playsinline></video>
     </div>
 
-    <div class="scene-list" id="sceneList">
-      {% for s in scenes %}
-      <div class="scene-row {{ 'on' if s.selected else '' }}" data-i="{{ s.i }}">
-        <input type="checkbox" class="cb" {% if s.selected %}checked{% endif %}>
-        <img class="thumb" loading="lazy" src="{{ url_for('thumb', job_id=job.id, idx=s.i) }}" alt="">
-        <div class="meta">
-          <div class="t">{{ '%.1f'|format(s.start) }}–{{ '%.1f'|format(s.end) }}s {% if s.selected %}<span class="aitag">AI</span>{% endif %}</div>
-          <textarea class="stxt" rows="2">{{ s.text }}</textarea>
-        </div>
+    <form method="post" action="{{ url_for('edit', job_id=job.id) }}" class="editform">
+      <input type="hidden" name="scenes_json" id="scenes_json">
+
+      <div class="fontpick">
+        <label for="font">字幕の書体</label>
+        <select name="font" id="font">
+          {% for key, label in font_opts %}
+          <option value="{{ key }}" {% if key == cur_font %}selected{% endif %}>
+            {{ label }}{% if key == 'auto' %}（いまは {{ ai_font }}）{% endif %}
+          </option>
+          {% endfor %}
+        </select>
       </div>
-      {% endfor %}
-    </div>
-    <button class="btn" type="submit" style="margin-top:16px">この内容で作り直す ✨</button>
-    <p class="muted" style="font-size:12px;margin-top:8px">チェックON＝採用 ・ 文字を直す＝字幕修正 ・ 文字を一部消す＝その分だけ映像も短く ・ チェックを外す/文字を空に＝シーンごとカット</p>
-  </form>
+
+      <div class="scene-list" id="sceneList">
+        {% for s in scenes %}
+        <div class="scene-row {{ 'on' if s.selected else '' }}" data-i="{{ s.i }}">
+          <input type="checkbox" class="cb" {% if s.selected %}checked{% endif %}
+                 aria-label="この場面を使う">
+          <img class="thumb" loading="lazy" src="{{ url_for('thumb', job_id=job.id, idx=s.i) }}" alt="">
+          <div class="meta">
+            <div class="t">{{ '%.1f'|format(s.start) }}–{{ '%.1f'|format(s.end) }}s</div>
+            <textarea class="stxt" rows="2">{{ s.text }}</textarea>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="edit-actions">
+        <button class="btn" type="submit">作り直す</button>
+        <a class="btn btn-ghost" href="{{ url_for('result', job_id=job.id) }}">やめる</a>
+      </div>
+    </form>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <style>
-  /* PC: プレビュー(左) ＋ 字幕リスト(右)。スマホ: 縦積み（字幕リストを全幅で読める） */
-  .editlayout{display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start}
-  .fontpick{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
-            padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
-  .fontpick label{font-size:13px;font-weight:600;white-space:nowrap}
-  .fontpick select{background:var(--panel);border:1px solid var(--line);color:var(--text);
-                   border-radius:8px;padding:7px 10px;font-size:14px;font-family:inherit}
-  .fontpick select:focus{outline:none;border-color:var(--brand)}
-  .scene-list{max-height:70vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px}
-  .scene-row{display:flex;gap:10px;padding:10px 8px;border-radius:10px;align-items:flex-start;border-bottom:1px solid var(--line)}
-  .scene-row:last-child{border-bottom:0}
-  .scene-row.on{background:rgba(124,92,255,.10)}
-  .scene-row .cb{margin-top:4px;width:18px;height:18px;flex:none;accent-color:var(--brand)}
-  .scene-row .thumb{width:74px;height:128px;flex:none;border-radius:8px;object-fit:cover;background:#000}
-  .scene-row .meta{flex:1;min-width:0}
-  .scene-row .t{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;margin-bottom:5px}
-  .scene-row .aitag{color:#b9a9ff;border:1px solid #b9a9ff55;border-radius:6px;padding:0 6px;font-size:10px;margin-left:4px}
-  .scene-row .stxt{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
-                   border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;line-height:1.5;
-                   resize:none;overflow:hidden}   /* 高さは内容に合わせて自動（全文を隠さない）*/
-  .scene-row .stxt:focus{outline:none;border-color:var(--brand)}
+  .edit{max-width:960px;margin:0 auto}
+  .edit-title{font-size:var(--fs-xl);font-weight:600;line-height:1.3;margin:0 0 var(--s1)}
+  .edit-hint{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s5)}
+
+  /* PC: プレビュー(左) ＋ 文字の一覧(右)。900px未満は縦積み */
+  .editlayout{display:grid;grid-template-columns:300px 1fr;gap:var(--s5);align-items:start}
+  .editpreview video{width:100%;max-height:70vh;border-radius:var(--r-md);background:#000;display:block;margin:0}
+
+  .fontpick{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s4)}
+  .fontpick label{font-size:var(--fs-sm);color:var(--muted);margin:0;white-space:nowrap}
+  .fontpick select{flex:1;min-width:200px;background:var(--surface);border:1px solid var(--line);
+    color:var(--text);border-radius:var(--r-sm);padding:var(--s2) var(--s3);
+    font-size:var(--fs-base);font-family:inherit}
+  .fontpick select:focus{outline:none;border-color:var(--accent)}
+
+  /* 文字の一覧そのものがタイムライン。行は線で区切るだけで、カードで囲まない */
+  .scene-list{border-top:1px solid var(--line)}
+  .scene-row{display:grid;grid-template-columns:auto auto 1fr;gap:var(--s3);
+    align-items:start;padding:var(--s4) var(--s1);border-bottom:1px solid var(--line)}
+  .scene-row.on{background:var(--accent-weak)}
   .scene-row.off{opacity:.5}
+  .scene-row .cb{width:22px;height:22px;margin-top:var(--s5);flex:none;accent-color:var(--accent)}
+  .scene-row .thumb{width:48px;height:85px;flex:none;border-radius:var(--r-sm);object-fit:cover;background:var(--surface)}
+  .scene-row .meta{min-width:0}
+  .scene-row .t{color:var(--muted);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;
+    margin-bottom:var(--s1)}
+  .scene-row .stxt{width:100%;background:var(--surface);border:1px solid var(--line);color:var(--text);
+    border-radius:var(--r-sm);padding:var(--s2) var(--s3);font-size:var(--fs-base);
+    font-family:inherit;line-height:1.6;resize:none;overflow:hidden}
+  .scene-row .stxt:focus{outline:none;border-color:var(--accent)}
 
-  /* スマホ〜タブレット: プレビューは「確認専用」、字幕リストは全幅で読める・押せる（ISSUE-001）
-     ※900px未満で1カラム化（768pxで2カラムだと横スクロールが出るため）*/
+  .edit-actions{display:flex;gap:var(--s3);align-items:center;margin-top:var(--s5)}
+
   @media(max-width:900px){
-    .editlayout{grid-template-columns:1fr;gap:14px}
-    .editpreview video{max-width:100%;max-height:42vh}   /* 確認できる大きさに留め、リストの場所を確保 */
-    .scene-list{max-height:none;padding:2px}             /* 内側スクロールをやめページごと送る */
-
-    /* 字幕を主役に：1行目に[チェック][サムネ][時刻]、2行目に字幕を“全幅”で置く */
-    .scene-row{display:grid;grid-template-columns:auto auto 1fr;grid-template-areas:"cb th t" "tx tx tx";
-               align-items:center;column-gap:10px;row-gap:8px;padding:12px 8px}
-    .scene-row .cb{grid-area:cb;width:26px;height:26px;margin:0}    /* 指で押しやすい */
+    .editlayout{grid-template-columns:1fr;gap:var(--s4)}
+    /* 主役は文字。プレビューは確認できる大きさに留め、一覧の場所を空ける */
+    .editpreview{display:flex;justify-content:center}
+    .editpreview video{width:auto;max-width:168px;max-height:30vh}
+    /* 1段目に[使う][サムネ][時刻]、2段目に文字を全幅で置く（狭い画面でも全文が読める） */
+    .scene-row{grid-template-areas:"cb th t" "tx tx tx";align-items:center;
+      column-gap:var(--s3);row-gap:var(--s2);padding:var(--s3) var(--s1)}
+    .scene-row .cb{grid-area:cb;width:24px;height:24px;margin:0}
     .scene-row .thumb{grid-area:th;width:44px;height:78px}
-    .scene-row .meta{display:contents}                              /* 中の時刻/字幕を上のグリッドに配置 */
-    .scene-row .t{grid-area:t;font-size:12px;margin:0}
-    .scene-row .stxt{grid-area:tx;font-size:16px;line-height:1.6;padding:10px}  /* 16px＝iOS自動ズーム回避 */
+    .scene-row .meta{display:contents}
+    .scene-row .t{grid-area:t;margin:0}
+    .scene-row .stxt{grid-area:tx}
+    .edit-actions{position:sticky;bottom:0;background:var(--bg);
+      border-top:1px solid var(--line);padding:var(--s3) 0;margin-top:var(--s4)}
+    .edit-actions .btn{flex:1}
   }
 </style>
 <script>
@@ -92,8 +108,8 @@
     row.classList.toggle('on', on);
     row.classList.toggle('off', !on);
   }
-  // 字幕は全文が見えている必要がある（内側スクロールで隠れると読めない・直せない）
-  function fit(txt) {
+  // 文字は全文が見えている必要がある（内側スクロールで隠れると読めない・直せない）
+  function fit(txt){
     txt.style.height = 'auto';
     txt.style.height = (txt.scrollHeight + 2) + 'px';
   }
@@ -101,7 +117,7 @@
     const cb = row.querySelector('.cb');
     const txt = row.querySelector('.stxt');
     cb.addEventListener('change', () => paint(row));
-    // 文字を空にしたら自動でカット（チェックを外す）、入れ直したら採用に戻す
+    // 文字を空にしたら自動でカット、入れ直したら使う状態に戻す
     txt.addEventListener('input', () => {
       if (!txt.value.trim()) { cb.checked = false; }
       else if (!cb.checked && document.activeElement === txt) { cb.checked = true; }
