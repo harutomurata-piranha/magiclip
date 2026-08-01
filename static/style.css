@@ -45,6 +45,35 @@
 .theme-light .card,.theme-light .panelbox{background:var(--bg);border:1px solid var(--line);
   border-radius:var(--r-md);padding:var(--s5);box-shadow:none}
 
+/* ヘッダーのCTAは常設要素。ページの主CTAと競合させないため secondary の見た目にする */
+.theme-light .nav .btn{background:var(--bg);color:var(--text);border:1px solid var(--line);
+  font-weight:600;padding:var(--s2) var(--s4);min-height:0;font-size:var(--fs-sm)}
+
+/* LP: グラデーション見出しをやめ、余白と字の大きさだけで階層を作る */
+.theme-light .hero{padding:var(--s7) 0 var(--s6);text-align:center}
+.theme-light .hero h1{background:none;-webkit-text-fill-color:var(--text);color:var(--text);
+  font-size:var(--fs-xl);font-weight:600;line-height:1.35;margin:0 0 var(--s4)}
+.theme-light .hero p{color:var(--muted);font-size:var(--fs-base);max-width:34em;
+  margin:0 auto var(--s6)}
+.theme-light .hero .cta{display:flex;gap:var(--s3);justify-content:center;align-items:center}
+.theme-light .badge{background:var(--surface);border:1px solid var(--line);color:var(--muted);
+  font-size:var(--fs-sm);padding:var(--s1) var(--s3);margin-bottom:var(--s5)}
+/* 3ステップ: 情報を置くだけなのでカードで囲まない（線と余白で十分） */
+.theme-light .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s6);
+  margin:var(--s6) 0;text-align:left}
+.theme-light .steps .card{background:none;border:0;border-top:1px solid var(--line);
+  border-radius:0;padding:var(--s4) 0 0}
+.theme-light .step-n{color:var(--muted);font-size:var(--fs-xs);font-weight:600;
+  letter-spacing:.04em;margin-bottom:var(--s1)}
+.theme-light .steps h3{font-size:var(--fs-base);font-weight:600;margin:0 0 var(--s1)}
+.theme-light .steps p{color:var(--muted);font-size:var(--fs-sm);margin:0}
+@media(max-width:720px){
+  .theme-light .steps{grid-template-columns:1fr;gap:var(--s4)}
+  .theme-light .hero{padding:var(--s6) 0 var(--s5)}
+  .theme-light .hero .cta{flex-direction:column}
+  .theme-light .hero .cta .btn{width:100%}
+}
+
 /* 署名1: 魔法の瞬間 — 完成時に一度だけ、動画の輪郭にブランド紫が立ち上がって消える */
 .magic{position:relative;display:inline-block;line-height:0}
 .magic::after{content:"";position:absolute;inset:-3px;border-radius:15px;
