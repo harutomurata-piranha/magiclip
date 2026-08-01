@@ -1,52 +1,81 @@
 {% extends "base.html" %}
 {% block title %}マイページ - MagiClip{% endblock %}
+{% block body_class %}theme-light{% endblock %}
 {% block content %}
-<h1>マイページ</h1>
-<p class="muted">{{ current_user.email }}</p>
-
-<div class="statrow">
-  <div class="stat">
-    <div class="big">{{ current_user.plan_label }}</div>
-    <div class="lbl">現在のプラン</div>
-  </div>
-  <div class="stat">
-    <div class="big">
-      {% if cfg.NO_LIMIT %}∞{% elif current_user.subscription_active %}無制限{% else %}{{ current_user.credits }}{% endif %}
+<div class="my">
+  <div class="my-head">
+    <div>
+      <h1 class="my-title">マイページ</h1>
+      <p class="my-mail">{{ current_user.email }}</p>
     </div>
-    <div class="lbl">残り本数{% if cfg.NO_LIMIT %}（開発：無制限）{% endif %}</div>
+    <a class="btn" href="{{ url_for('upload') }}">動画をつくる</a>
   </div>
-  <div class="stat">
-    <div class="big">{{ jobs|length }}</div>
-    <div class="lbl">作成した動画</div>
+
+  <dl class="my-stats">
+    <div><dt>プラン</dt><dd>{{ current_user.plan_label }}</dd></div>
+    <div><dt>残り本数</dt>
+      <dd>{% if cfg.NO_LIMIT %}無制限{% elif current_user.subscription_active %}無制限{% else %}{{ current_user.credits }}{% endif %}</dd></div>
+    <div><dt>つくった動画</dt><dd>{{ jobs|length }}</dd></div>
+  </dl>
+
+  {% if jobs %}
+  <table class="my-jobs">
+    <tr><th>ファイル</th><th>状態</th><th class="col-date">作成日時</th><th></th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.filename }}</td>
+      <td>
+        {% if j.status == '完成' %}<span class="tag done">完成</span>
+        {% elif j.status == 'エラー' %}<span class="tag err">失敗</span>
+        {% else %}<span class="tag run">{{ j.status }}</span>{% endif %}
+      </td>
+      <td class="col-date">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>
+        {% if j.status == '完成' %}<a href="{{ url_for('result', job_id=j.id) }}">ひらく</a>
+        {% elif j.status not in ['エラー'] %}<a href="{{ url_for('processing', job_id=j.id) }}">ようすを見る</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  {# 空状態は3点セット：何が無いか／どうすればよいか／次の操作 #}
+  <div class="my-empty">
+    <p class="my-empty-title">まだ動画がありません</p>
+    <p class="my-empty-sub">動画を1つえらぶだけで、字幕つきのショート動画ができます。</p>
+    <a class="btn" href="{{ url_for('upload') }}">動画をえらぶ</a>
   </div>
+  {% endif %}
 </div>
-
-<div class="center" style="margin:24px 0">
-  <a class="btn" href="{{ url_for('upload') }}">＋ 新しく作成する</a>
-  <a class="btn btn-ghost" href="{{ url_for('plans') }}">プランを変更</a>
-</div>
-
-<h3>作成履歴</h3>
-{% if jobs %}
-<table>
-  <tr><th>ファイル</th><th>状態</th><th>作成日時</th><th></th></tr>
-  {% for j in jobs %}
-  <tr>
-    <td>{{ j.filename }}</td>
-    <td>
-      {% if j.status == '完成' %}<span class="tag done">完成</span>
-      {% elif j.status == 'エラー' %}<span class="tag err">エラー</span>
-      {% else %}<span class="tag run">{{ j.status }}</span>{% endif %}
-    </td>
-    <td class="muted">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-    <td>
-      {% if j.status == '完成' %}<a href="{{ url_for('result', job_id=j.id) }}">開く</a>
-      {% elif j.status not in ['エラー'] %}<a href="{{ url_for('processing', job_id=j.id) }}">確認</a>{% endif %}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}
-<p class="muted">まだ作成した動画はありません。</p>
-{% endif %}
+{% endblock %}
+{% block scripts %}
+<style>
+  .my{max-width:760px;margin:0 auto}
+  .my-head{display:flex;align-items:flex-start;justify-content:space-between;
+    gap:var(--s4);margin-bottom:var(--s6)}
+  .my-title{font-size:var(--fs-xl);font-weight:600;line-height:1.3;margin:0 0 var(--s1)}
+  .my-mail{color:var(--muted);font-size:var(--fs-sm);margin:0}
+  .my-stats{display:flex;gap:var(--s6);margin:0 0 var(--s6);padding:var(--s4) 0;
+    border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .my-stats div{margin:0}
+  .my-stats dt{color:var(--muted);font-size:var(--fs-xs);margin-bottom:var(--s1)}
+  .my-stats dd{margin:0;font-size:var(--fs-lg);font-weight:600}
+  .my-jobs{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+  .my-jobs th,.my-jobs td{text-align:left;padding:var(--s3) var(--s2);
+    border-bottom:1px solid var(--line)}
+  .my-jobs th{color:var(--muted);font-weight:600;font-size:var(--fs-xs)}
+  .my-jobs a{color:var(--accent);font-weight:600}
+  .tag{font-size:var(--fs-xs);padding:2px 10px;border-radius:999px;
+    background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+  .tag.done{color:var(--success)}
+  .tag.err{color:var(--danger)}
+  .my-empty{padding:var(--s6) 0}
+  .my-empty-title{font-size:var(--fs-lg);font-weight:600;margin:0 0 var(--s1)}
+  .my-empty-sub{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s4)}
+  @media(max-width:720px){
+    .my-head{flex-direction:column}
+    .my-head .btn{width:100%;text-align:center}
+    .my-stats{gap:var(--s5);justify-content:space-between}
+    .col-date{display:none}   /* 狭い画面では日時を省いて本文を読ませる */
+  }
+</style>
 {% endblock %}

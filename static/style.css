@@ -229,3 +229,22 @@ video{width:100%;max-width:340px;border-radius:14px;margin:18px auto;display:blo
   .hero h1{font-size:26px}
   .stat .big{font-size:26px}
 }
+
+/* フォーム（ログイン/登録） */
+.theme-light .formcard{background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:var(--s6);max-width:400px;box-shadow:none}
+.theme-light .formcard h2{font-size:var(--fs-lg);font-weight:600;margin:0 0 var(--s1)}
+.theme-light .formcard .sub{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s5)}
+.theme-light label{font-size:var(--fs-sm);color:var(--muted);margin:var(--s4) 0 var(--s2)}
+.theme-light input[type=email],.theme-light input[type=password]{
+  background:var(--surface);border:1px solid var(--line);color:var(--text);
+  border-radius:var(--r-sm);padding:var(--s3);font-size:var(--fs-base)}
+.theme-light input[type=email]:focus,.theme-light input[type=password]:focus{
+  outline:none;border-color:var(--accent)}
+.theme-light .formcard .btn{width:100%;margin-top:var(--s5)}
+.theme-light .altlink{color:var(--muted);font-size:var(--fs-sm);margin-top:var(--s4)}
+.theme-light .altlink a{color:var(--accent);font-weight:600}
+/* フラッシュ（通知）: 影を使わず、色と細枠で伝える */
+.theme-light .flash{border-radius:var(--r-sm);font-size:var(--fs-sm);padding:var(--s3) var(--s4)}
+.theme-light .flash.ok{background:#ecfdf3;color:var(--success);border:1px solid #abefc6}
+.theme-light .flash.error{background:#fef3f2;color:var(--danger);border:1px solid #fecdca}

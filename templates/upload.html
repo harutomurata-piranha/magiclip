@@ -1,23 +1,42 @@
 {% extends "base.html" %}
-{% block title %}動画をアップロード - MagiClip{% endblock %}
+{% block title %}動画をえらぶ - MagiClip{% endblock %}
+{% block body_class %}theme-light{% endblock %}
 {% block content %}
-<div class="panelbox">
-  <h1>動画をアップロード</h1>
-  <p class="muted">動画を1つ選ぶだけ。あとはAIにおまかせ。</p>
+<div class="upload">
+  <h1 class="upload-title">動画をえらぶ</h1>
+
   <form method="post" enctype="multipart/form-data" id="form">
     <label class="drop" id="drop">
-      <div id="label">クリックして動画を選択<br><span class="muted">（または ここにドラッグ＆ドロップ）</span></div>
+      <span id="label">動画をえらぶ<span class="drop-sub">またはここにドラッグ＆ドロップ</span></span>
       <input type="file" name="video" id="file" accept="video/*" hidden required>
     </label>
-    <label class="proToggle" style="display:flex;align-items:center;gap:10px;justify-content:center;color:var(--muted);font-size:14px;margin:6px 0 4px">
-      <input type="checkbox" name="mode" value="pro" style="width:auto">
-      プロ編集を使う（完成後、字幕を直すだけでカットも変えられる）
+
+    <label class="opt">
+      <input type="checkbox" name="mode" value="pro">
+      <span>あとで文字を直せるようにする</span>
     </label>
-    <button class="btn" type="submit" id="go" disabled>魔法をかける ✨</button>
+
+    <button class="btn" type="submit" id="go" disabled>作成する</button>
   </form>
 </div>
 {% endblock %}
 {% block scripts %}
+<style>
+  .upload{max-width:520px;margin:0 auto}
+  .upload-title{font-size:var(--fs-xl);font-weight:600;line-height:1.3;margin:0 0 var(--s5)}
+  .drop{display:flex;align-items:center;justify-content:center;text-align:center;
+    min-height:180px;padding:var(--s6) var(--s4);cursor:pointer;
+    border:1px dashed var(--line);border-radius:var(--r-md);background:var(--surface);
+    font-size:var(--fs-base);font-weight:600;color:var(--text)}
+  .drop:hover,.drop.over{border-color:var(--accent);color:var(--accent)}
+  .drop-sub{display:block;margin-top:var(--s2);font-size:var(--fs-sm);
+    font-weight:400;color:var(--muted)}
+  .opt{display:flex;align-items:center;gap:var(--s2);margin:var(--s4) 0;
+    font-size:var(--fs-sm);color:var(--muted);cursor:pointer}
+  .opt input{width:20px;height:20px;accent-color:var(--accent);margin:0}
+  .upload .btn{width:100%}
+  .upload .btn:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
+</style>
 <script>
   const file = document.getElementById('file');
   const drop = document.getElementById('drop');
@@ -26,12 +45,12 @@
   file.onchange = () => {
     if (file.files.length) { label.textContent = file.files[0].name; go.disabled = false; }
   };
-  drop.ondragover = e => { e.preventDefault(); drop.style.borderColor = '#7c5cff'; };
-  drop.ondragleave = () => drop.style.borderColor = '';
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
   drop.ondrop = e => {
-    e.preventDefault(); drop.style.borderColor = '';
+    e.preventDefault(); drop.classList.remove('over');
     if (e.dataTransfer.files.length) { file.files = e.dataTransfer.files; file.onchange(); }
   };
-  document.getElementById('form').onsubmit = () => { go.disabled = true; go.textContent = 'アップロード中…'; };
+  document.getElementById('form').onsubmit = () => { go.disabled = true; go.textContent = 'アップロード中'; };
 </script>
 {% endblock %}

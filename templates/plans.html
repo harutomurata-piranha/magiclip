@@ -1,63 +1,89 @@
 {% extends "base.html" %}
-{% block title %}料金プラン - MagiClip{% endblock %}
+{% block title %}料金 - MagiClip{% endblock %}
+{% block body_class %}theme-light{% endblock %}
 {% block content %}
-<div class="center">
-  <h1>シンプルな料金</h1>
-  <p class="muted">まずは無料で。必要になったら従量課金か月額で。</p>
+<div class="plans">
+  <h1 class="plans-title">料金</h1>
+  <p class="plans-sub">まずは無料で。必要になったら1本ずつ、たくさん作るなら月額で。</p>
+
+  {# 料金カードは「独立して操作できるまとまり」＝Cardの正しい用途。主CTAは推奨プランの1つだけ #}
+  <div class="plangrid">
+    <div class="plan">
+      <h2>おためし</h2>
+      <p class="price">¥0</p>
+      <ul>
+        <li>{{ cfg.FREE_TRIAL_CREDITS }}本まで無料</li>
+        <li>すべての機能を使える</li>
+        <li>カード登録なし</li>
+      </ul>
+      {% if current_user.is_authenticated %}
+        <a class="btn btn-secondary" href="{{ url_for('upload') }}">動画をつくる</a>
+      {% else %}
+        <a class="btn btn-secondary" href="{{ url_for('register') }}">無料ではじめる</a>
+      {% endif %}
+    </div>
+
+    <div class="plan feat">
+      <p class="plan-badge">よく使われています</p>
+      <h2>1本ずつ</h2>
+      <p class="price">¥{{ cfg.PRICE_PAYG_JPY }}<span>／1本</span></p>
+      <ul>
+        <li>使った分だけ支払う</li>
+        <li>1本ずつ購入</li>
+        <li>期限なし</li>
+      </ul>
+      {% if current_user.is_authenticated %}
+        <form method="post" action="{{ url_for('checkout', kind='payg') }}">
+          <button class="btn" type="submit">1本購入する</button>
+        </form>
+      {% else %}
+        <a class="btn" href="{{ url_for('register') }}">登録して購入</a>
+      {% endif %}
+    </div>
+
+    <div class="plan">
+      <h2>月額</h2>
+      <p class="price">¥{{ cfg.PRICE_MONTHLY_JPY }}<span>／月</span></p>
+      <ul>
+        <li>本数の制限なし</li>
+        <li>いつでも解約できる</li>
+      </ul>
+      {% if current_user.is_authenticated %}
+        <form method="post" action="{{ url_for('checkout', kind='monthly') }}">
+          <button class="btn btn-secondary" type="submit">月額にする</button>
+        </form>
+      {% else %}
+        <a class="btn btn-secondary" href="{{ url_for('register') }}">登録して開始</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not cfg.stripe_enabled %}
+  <p class="plans-note">開発モードのため、購入ボタンは決済をシミュレートします。</p>
+  {% endif %}
 </div>
-
-<div class="plangrid">
-  <div class="plan">
-    <h3>お試し無料</h3>
-    <div class="price">¥0</div>
-    <ul>
-      <li>{{ cfg.FREE_TRIAL_CREDITS }}本まで無料</li>
-      <li>全機能おためし</li>
-      <li>クレカ登録不要</li>
-    </ul>
-    {% if current_user.is_authenticated %}
-      <a class="btn btn-ghost" href="{{ url_for('upload') }}">作成する</a>
-    {% else %}
-      <a class="btn" href="{{ url_for('register') }}">無料で始める</a>
-    {% endif %}
-  </div>
-
-  <div class="plan feat">
-    <h3>従量課金</h3>
-    <div class="price">¥{{ cfg.PRICE_PAYG_JPY }}<small> / 1本</small></div>
-    <ul>
-      <li>使った分だけ支払い</li>
-      <li>1本ずつ購入</li>
-      <li>有効期限なし</li>
-    </ul>
-    {% if current_user.is_authenticated %}
-      <form method="post" action="{{ url_for('checkout', kind='payg') }}">
-        <button class="btn" type="submit">1本購入する</button>
-      </form>
-    {% else %}
-      <a class="btn" href="{{ url_for('register') }}">登録して購入</a>
-    {% endif %}
-  </div>
-
-  <div class="plan">
-    <h3>月額プラン</h3>
-    <div class="price">¥{{ cfg.PRICE_MONTHLY_JPY }}<small> / 月</small></div>
-    <ul>
-      <li>作り放題</li>
-      <li>本数制限なし</li>
-      <li>いつでも解約OK</li>
-    </ul>
-    {% if current_user.is_authenticated %}
-      <form method="post" action="{{ url_for('checkout', kind='monthly') }}">
-        <button class="btn btn-ghost" type="submit">月額に登録</button>
-      </form>
-    {% else %}
-      <a class="btn btn-ghost" href="{{ url_for('register') }}">登録して開始</a>
-    {% endif %}
-  </div>
-</div>
-
-{% if not cfg.stripe_enabled %}
-<p class="center muted" style="margin-top:24px">※開発モード：Stripe未設定のため、購入ボタンは決済をシミュレートします。</p>
-{% endif %}
+{% endblock %}
+{% block scripts %}
+<style>
+  .plans{max-width:900px;margin:0 auto}
+  .plans-title{font-size:var(--fs-xl);font-weight:600;line-height:1.3;margin:0 0 var(--s1)}
+  .plans-sub{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s6)}
+  .plangrid{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s4);align-items:stretch}
+  .plan{display:flex;flex-direction:column;background:var(--bg);
+    border:1px solid var(--line);border-radius:var(--r-md);padding:var(--s5)}
+  .plan.feat{border-color:var(--accent)}
+  .plan-badge{display:inline-block;align-self:flex-start;color:var(--accent);
+    background:var(--accent-weak);border-radius:999px;padding:2px 10px;
+    font-size:var(--fs-xs);font-weight:600;margin:0 0 var(--s2)}
+  .plan h2{font-size:var(--fs-base);font-weight:600;margin:0 0 var(--s2)}
+  .price{font-size:var(--fs-lg);font-weight:700;margin:0 0 var(--s4)}
+  .price span{font-size:var(--fs-sm);font-weight:400;color:var(--muted)}
+  .plan ul{list-style:none;padding:0;margin:0 0 var(--s5);
+    color:var(--muted);font-size:var(--fs-sm)}
+  .plan li{padding:var(--s1) 0}
+  .plan form{margin-top:auto}
+  .plan .btn{width:100%;text-align:center}
+  .plans-note{color:var(--muted);font-size:var(--fs-sm);margin:var(--s5) 0 0}
+  @media(max-width:720px){ .plangrid{grid-template-columns:1fr} }
+</style>
 {% endblock %}

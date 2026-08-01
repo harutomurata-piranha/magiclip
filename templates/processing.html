@@ -1,23 +1,36 @@
 {% extends "base.html" %}
-{% block title %}処理中 - MagiClip{% endblock %}
+{% block title %}作成中 - MagiClip{% endblock %}
+{% block body_class %}theme-light{% endblock %}
 {% block content %}
-<div class="panelbox">
-  <h1 id="title">魔法をかけています…</h1>
+<div class="proc">
+  <h1 class="proc-title" id="title">つくっています</h1>
 
-  <div class="prog"><div class="prog-bar" id="bar" style="width:0%"></div></div>
-  <p class="prog-pct"><span id="pct">0</span>%<span id="eta" class="muted"></span></p>
+  {# 見せ場は進捗そのもの。工程名と残り時間を必ず出す（設計の原則5） #}
+  <div class="prog"><div class="prog-bar" id="bar"></div></div>
+  <p class="proc-step"><span id="msg">準備しています</span></p>
+  <p class="proc-meta"><span id="pct">0</span>%<span id="eta"></span></p>
 
-  <p class="muted" id="msg">準備しています</p>
-  <p class="muted" id="note" style="font-size:13px">
-    このまま他のアプリを見ていて大丈夫です。戻ってくれば続きが表示されます。
-  </p>
-  <div id="failbox" style="display:none">
-    <a class="btn" href="{{ url_for('upload') }}">もう一度ためす</a>
-    <p class="muted" style="font-size:13px;margin-top:10px">失敗した場合、消費した本数は自動で返却されます。</p>
+  <p class="proc-note" id="note">この画面を閉じても作成は続きます。</p>
+
+  <div id="failbox" class="proc-fail">
+    <a class="btn" href="{{ url_for('upload') }}">別の動画でためす</a>
+    <p class="proc-note">失敗したときは、消費した本数を返しています。</p>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
+<style>
+  .proc{max-width:480px;margin:0 auto}
+  .proc-title{font-size:var(--fs-xl);font-weight:600;line-height:1.3;margin:0 0 var(--s5)}
+  .prog{height:8px;background:var(--surface);border:1px solid var(--line);
+    border-radius:999px;overflow:hidden}
+  .prog-bar{height:100%;width:0;background:var(--accent);transition:width .6s ease}
+  .proc-step{font-size:var(--fs-base);font-weight:600;margin:var(--s4) 0 var(--s1)}
+  .proc-meta{color:var(--muted);font-size:var(--fs-sm);margin:0}
+  .proc-note{color:var(--muted);font-size:var(--fs-sm);margin:var(--s5) 0 0}
+  .proc-fail{display:none;margin-top:var(--s5)}
+  .proc-fail .btn{width:100%}
+</style>
 <script>
   const jobId = "{{ job.id }}";
   let timer = null, stopped = false, shown = 0, etaSec = null, etaAt = null;
@@ -26,10 +39,12 @@
     stopped = true;
     clearTimeout(timer);
     document.querySelector('.prog').style.display = 'none';
-    document.querySelector('.prog-pct').style.display = 'none';
+    document.querySelector('.proc-meta').style.display = 'none';
     document.getElementById('note').style.display = 'none';
-    document.getElementById('title').textContent = 'うまくいきませんでした';
-    document.getElementById('msg').textContent = detail || 'エラーが発生しました。もう一度お試しください。';
+    // 何が起きたか＋どう直すかを出す（設計のエラー表示規約）
+    document.getElementById('title').textContent = 'つくれませんでした';
+    document.getElementById('msg').textContent =
+      detail || 'この動画からは作れませんでした。別の動画でお試しください。';
     document.getElementById('failbox').style.display = 'block';
   }
 
