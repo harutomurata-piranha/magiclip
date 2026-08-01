@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagiClip UI 提案</title>
+</head>
+<body>
+<style>
+:root{--bg:#fff;--surface:#f7f8fa;--line:#e4e7ec;--text:#1a1d23;--muted:#5f6673;
+--accent:#1e3a8a;--accent-weak:#eef2ff;--danger:#b42318;--brand:#7C3AED;
+--r-sm:8px;--r-md:12px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+ font:400 16px/1.7 -apple-system,"Hiragino Kaku Gothic ProN",sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;line-height:1.3;font-weight:600;margin:0 0 8px}
+h2{font-size:20px;font-weight:600;margin:48px 0 4px}
+.note{color:var(--muted);font-size:14px;margin:0 0 16px}
+.screen{border:1px solid var(--line);border-radius:var(--r-md);padding:24px;background:var(--bg)}
+.btn{border:0;border-radius:var(--r-sm);padding:12px 20px;font:700 16px/1.4 inherit;cursor:pointer;min-height:44px}
+.primary{background:var(--accent);color:#fff}
+.secondary{background:#fff;color:var(--text);border:1px solid var(--line);font-weight:600}
+.ghost{background:none;color:var(--muted);font-weight:600}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+/* 署名1: 魔法の瞬間 — 完成時に一度だけ紫の輪郭が立ち上がって消える */
+.stage{display:flex;justify-content:center;margin:8px 0 16px}
+.video{width:200px;height:356px;border-radius:var(--r-md);background:#111 center/cover no-repeat;
+ position:relative;overflow:visible}
+.video::after{content:"";position:absolute;inset:-3px;border-radius:15px;
+ border:2px solid var(--brand);opacity:0;animation:magic .6s cubic-bezier(.2,.8,.2,1) .3s 1 forwards}
+@keyframes magic{0%{opacity:0;transform:scale(1.04)}40%{opacity:1}100%{opacity:0;transform:scale(1)}}
+.replay{font-size:13px;color:var(--muted);cursor:pointer;text-decoration:underline}
+/* 署名2: 文字がタイムライン */
+.line{display:grid;grid-template-columns:22px 44px 1fr;gap:12px;align-items:center;
+ padding:12px 8px;border-bottom:1px solid var(--line)}
+.line:last-child{border-bottom:0}
+.line.on{background:var(--accent-weak)}
+.line.off{opacity:.45}
+.thumb{width:44px;height:78px;border-radius:6px;background:#c9ced6 center/cover}
+.tc{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tx{font-size:16px;line-height:1.6;margin-top:2px}
+input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
+.bar{height:8px;background:var(--line);border-radius:999px;overflow:hidden}
+.bar>i{display:block;height:100%;width:62%;background:var(--accent)}
+.err{border-left:3px solid var(--danger);padding:12px 16px;background:#fef3f2;border-radius:var(--r-sm)}
+.err b{color:var(--danger)}
+.empty{text-align:left;padding:24px 0}
+.empty p{margin:0 0 4px}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cmp .box{border:1px solid var(--line);border-radius:var(--r-md);padding:12px}
+.cmp .lbl{font-size:12px;color:var(--muted);margin-bottom:8px}
+.strike{text-decoration:line-through;color:var(--muted)}
+</style>
+<div class="wrap">
+  <h1>MagiClip UI 提案</h1>
+  <p class="note">コンセプト「魔法のように動画をつくれる」を、装飾ではなく体験で表現する。</p>
+
+  <h2>① 完成画面 — 魔法の瞬間</h2>
+  <p class="note">開いた瞬間、動画の輪郭に紫が一度だけ立ち上がって消える（0.6秒・1回だけ）。
+     普段は紫が出てこないので、この瞬間だけ効く。見せ場は動画そのもの。CTAは1つ。</p>
+  <div class="screen">
+    <div class="stage"><div class="video" id="v"></div></div>
+    <div class="row" style="justify-content:center">
+      <button class="btn primary">ダウンロード</button>
+      <button class="btn secondary">文字で直す</button>
+      <button class="btn ghost">もう1本つくる</button>
+    </div>
+    <p class="note" style="text-align:center;margin:12px 0 0">
+      <span class="replay" onclick="const e=document.getElementById('v');e.style.animation='none';e.offsetHeight;e.style.animation='';location.reload()">演出をもう一度見る</span>
+    </p>
+  </div>
+
+  <h2>② 編集画面 — 文字がタイムライン</h2>
+  <p class="note">波形もトラックも置かない。文字を消すと映像も消える。映像は文字の添え物。</p>
+  <div class="screen" style="padding:8px 16px">
+    <div class="line on"><input type="checkbox" checked><div class="thumb"></div>
+      <div><div class="tc">6.9–11.6s</div><div class="tx">ここは郵便局ですね 郵便局があって</div></div></div>
+    <div class="line on"><input type="checkbox" checked><div class="thumb"></div>
+      <div><div class="tc">16.4–21.1s</div><div class="tx">この辺りがラファエットっていう洋服屋さんですね</div></div></div>
+    <div class="line off"><input type="checkbox"><div class="thumb"></div>
+      <div><div class="tc">21.8–28.1s</div><div class="tx strike">洋服屋さん ちょっと こう こういうのね</div></div></div>
+  </div>
+
+  <h2>③ 生成中 — 裏で何が起きているかを隠さない</h2>
+  <div class="screen">
+    <div class="bar"><i></i></div>
+    <p style="margin:12px 0 0;font-weight:600">テンポよくカットしています</p>
+    <p class="note" style="margin:2px 0 0">62% ・ 残り約2分 ／ この画面を閉じても作成は続きます</p>
+  </div>
+
+  <h2>④ 元素材と完成の比較</h2>
+  <p class="note">「AIが何を残し、何を切ったか」が分かる＝魔法の種明かしではなく、信頼の担保。</p>
+  <div class="cmp">
+    <div class="box"><div class="lbl">元の素材 2分05秒</div><div class="tx" style="color:var(--muted)">はい えーと 六方会館 六方会館ですね 地元で結構有名な…</div></div>
+    <div class="box"><div class="lbl">完成 38秒</div><div class="tx">六方会館 地元で結構有名な飲食がいっぱいある会館で</div></div>
+  </div>
+
+  <h2>⑤ 空状態・エラー</h2>
+  <div class="screen empty">
+    <p style="font-weight:600">まだ動画がありません</p>
+    <p class="note">動画を1本選ぶだけで、字幕つきのショート動画ができます。</p>
+    <button class="btn primary">動画をえらぶ</button>
+  </div>
+  <div style="height:16px"></div>
+  <div class="err"><b>この動画からは編集を作れませんでした。</b><br>
+    音声が入っていないか、短すぎる可能性があります。別の動画でお試しください。</div>
+</div>
+
+</body>
+</html>

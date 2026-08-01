@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagiClip デザイントークン</title>
+</head>
+<body>
+<style>
+:root{--bg:#fff;--surface:#f7f8fa;--line:#e4e7ec;--text:#1a1d23;--muted:#5f6673;
+--accent:#1e3a8a;--accent-weak:#eef2ff;--danger:#b42318;--success:#067647;
+--r-sm:8px;--r-md:12px;--e1:0 1px 2px rgba(16,24,40,.06)}
+body{margin:0;background:var(--bg);color:var(--text);
+ font:400 16px/1.7 -apple-system,"Hiragino Kaku Gothic ProN",sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:32px 16px}
+h1{font-size:28px;line-height:1.3;font-weight:600;margin:0 0 8px}
+h2{font-size:20px;font-weight:600;margin:32px 0 12px}
+p.sub{color:var(--muted);margin:0 0 24px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.btn{border:0;border-radius:var(--r-sm);padding:12px 20px;font:700 16px/1.4 inherit;cursor:pointer;min-height:44px}
+.primary{background:var(--accent);color:#fff}
+.secondary{background:#fff;color:var(--text);border:1px solid var(--line);font-weight:600}
+.ghost{background:none;color:var(--muted);font-weight:600}
+.card{border:1px solid var(--line);border-radius:var(--r-md);padding:16px;background:var(--bg)}
+.card.sel{background:var(--accent-weak);border-color:var(--accent)}
+label{display:block;font-size:14px;color:var(--muted);margin-bottom:8px}
+input,textarea{width:100%;box-sizing:border-box;background:var(--surface);border:1px solid var(--line);
+ border-radius:var(--r-sm);padding:12px;font:400 16px/1.6 inherit;color:var(--text)}
+.swatch{display:flex;gap:8px;flex-wrap:wrap}
+.sw{width:96px;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;font-size:12px}
+.sw i{display:block;height:44px}
+.sw span{display:block;padding:6px 8px;color:var(--muted)}
+.bar{height:8px;background:var(--line);border-radius:999px;overflow:hidden}
+.bar>i{display:block;height:100%;width:62%;background:var(--accent)}
+.tag{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--surface);color:var(--muted);border:1px solid var(--line)}
+.err{border-left:3px solid var(--danger);padding:12px 16px;background:#fef3f2;border-radius:var(--r-sm)}
+.err b{color:var(--danger)}
+</style>
+<div class="wrap">
+  <h1>MagiClip デザイントークン（提案）</h1>
+  <p class="sub">ライト基調 ／ アクセントは紺に近いブルー1色 ／ グラデーションなし ／ 影は原則なし</p>
+
+  <h2>色</h2>
+  <div class="swatch">
+    <div class="sw"><i style="background:#ffffff"></i><span>bg #ffffff</span></div>
+    <div class="sw"><i style="background:#f7f8fa"></i><span>surface</span></div>
+    <div class="sw"><i style="background:#e4e7ec"></i><span>line</span></div>
+    <div class="sw"><i style="background:#5f6673"></i><span>muted</span></div>
+    <div class="sw"><i style="background:#1a1d23"></i><span>text</span></div>
+    <div class="sw"><i style="background:#1e3a8a"></i><span>accent</span></div>
+    <div class="sw"><i style="background:#eef2ff"></i><span>accent-weak</span></div>
+    <div class="sw"><i style="background:#b42318"></i><span>danger</span></div>
+  </div>
+
+  <h2>ボタン（主CTAは1画面に1つ）</h2>
+  <div class="row">
+    <button class="btn primary">ダウンロード</button>
+    <button class="btn secondary">作り直す</button>
+    <button class="btn ghost">戻る</button>
+  </div>
+
+  <h2>入力</h2>
+  <label for="a">字幕</label>
+  <textarea id="a" rows="2">ここは郵便局ですね 郵便局があって</textarea>
+
+  <h2>カード（選択状態）</h2>
+  <div class="row" style="align-items:stretch">
+    <div class="card" style="flex:1">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">11.6–16.4s</div>
+      その奥まっすぐに行きますと
+    </div>
+    <div class="card sel" style="flex:1">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">16.4–21.1s <span class="tag">採用</span></div>
+      この辺りがラファエットっていう洋服屋さんですね
+    </div>
+  </div>
+
+  <h2>進捗</h2>
+  <div class="bar"><i></i></div>
+  <p class="sub" style="margin-top:8px;font-size:14px">テンポよくカットしています ／ 残り約2分</p>
+
+  <h2>エラー</h2>
+  <div class="err"><b>この動画からは編集を作れませんでした。</b><br>
+    音声が入っていないか、短すぎる可能性があります。</div>
+</div>
+
+</body>
+</html>
