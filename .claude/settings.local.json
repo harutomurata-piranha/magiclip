@@ -100,7 +100,8 @@
       "Bash(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/)",
       "Bash(echo \"  / \\(401=限定公開\\):  $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/\\)\")",
       "Bash(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz)",
-      "Bash(echo \"  /healthz:          $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz\\)\")"
+      "Bash(echo \"  /healthz:          $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz\\)\")",
+      "mcp__claude-in-chrome__find"
     ]
   },
   "sandbox": {

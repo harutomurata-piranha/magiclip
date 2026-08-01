@@ -3,6 +3,55 @@
   --text:#eef1f7; --muted:#9aa3b5; --brand:#7c5cff; --brand2:#22d3ee;
   --ok:#16a34a; --err:#dc2626; --radius:16px;
 }
+
+/* ===== 新デザイン（docs/design-system.md）=====
+   移行中のため、body に .theme-light が付いたページにだけ適用する。
+   既存ページ（ダーク）はそのまま動く。Phase 3 で順次このテーマへ寄せる。 */
+.theme-light{
+  /* color: グレー1系統＋アクセント1色。ブランド紫はロゴと完成の瞬間のみ */
+  --bg:#ffffff; --surface:#f7f8fa; --line:#e4e7ec;
+  --text:#1a1d23; --muted:#5f6673;
+  --accent:#1e3a8a; --accent-weak:#eef2ff;
+  --danger:#b42318; --success:#067647; --brand:#7C3AED;
+  /* 旧クラスが参照する変数も上書きして、ヘッダー等が破綻しないようにする */
+  --panel:#ffffff; --panel2:#f7f8fa;
+  /* spacing 4pxグリッド */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  /* type */
+  --fs-xs:12px; --fs-sm:14px; --fs-base:16px; --fs-lg:20px; --fs-xl:28px;
+  /* radius / elevation */
+  --r-sm:8px; --r-md:12px; --radius:12px;
+  --e1:0 1px 2px rgba(16,24,40,.06); --e2:0 8px 24px rgba(16,24,40,.12);
+
+  background:var(--bg); color:var(--text);
+}
+/* ヘッダー・フッター：グラデーションと半透明の黒をやめ、線だけで区切る */
+.theme-light .nav{background:var(--bg);border-bottom:1px solid var(--line);backdrop-filter:none}
+.theme-light .brand-text{background:none;-webkit-text-fill-color:var(--text);color:var(--text)}
+.theme-light .brand-spark{filter:none}      /* 光らせない（魔法は完成時だけ） */
+.theme-light .nav nav a{color:var(--muted)}
+.theme-light .nav nav a:hover{color:var(--text)}
+.theme-light .foot{color:var(--muted)}
+
+/* Button: primary=1画面に1つ / secondary / ghost */
+.theme-light .btn{background:var(--accent);color:#fff;font-weight:700;
+  border-radius:var(--r-sm);padding:var(--s3) var(--s5);min-height:44px;font-size:var(--fs-base)}
+.theme-light .btn:hover{transform:none;opacity:.92}
+.theme-light .btn-secondary{background:var(--bg);color:var(--text);
+  border:1px solid var(--line);font-weight:600}
+.theme-light .btn-ghost{background:none;border:0;color:var(--muted);font-weight:600}
+
+/* Card: 独立して操作できるまとまりにだけ使う。影は付けない */
+.theme-light .card,.theme-light .panelbox{background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:var(--s5);box-shadow:none}
+
+/* 署名1: 魔法の瞬間 — 完成時に一度だけ、動画の輪郭にブランド紫が立ち上がって消える */
+.magic{position:relative;display:inline-block;line-height:0}
+.magic::after{content:"";position:absolute;inset:-3px;border-radius:15px;
+  border:2px solid var(--brand);opacity:0;pointer-events:none;
+  animation:magic .6s cubic-bezier(.2,.8,.2,1) .25s 1 forwards}
+@keyframes magic{0%{opacity:0;transform:scale(1.04)}40%{opacity:1}100%{opacity:0;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.magic::after{animation:none}}
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,"Hiragino Kaku Gothic ProN",sans-serif;
   background:var(--bg);color:var(--text);line-height:1.7}
