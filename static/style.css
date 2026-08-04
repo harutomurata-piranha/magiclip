@@ -240,7 +240,24 @@ video{width:100%;max-width:340px;border-radius:14px;margin:18px auto;display:blo
   background:var(--surface);border:1px solid var(--line);color:var(--text);
   border-radius:var(--r-sm);padding:var(--s3);font-size:var(--fs-base)}
 .theme-light input[type=email]:focus,.theme-light input[type=password]:focus{
-  outline:none;border-color:var(--accent)}
+  border-color:var(--accent)}
+
+/* フォーカスの可視表示（WCAG 2.4.7）。
+   キーボード操作でいまどこにいるかが常に分かるよう、全ての操作可能要素に同じリングを出す。
+   outline を消して枠色だけで示す方法は弱すぎるため使わない。 */
+.theme-light a:focus-visible,
+.theme-light button:focus-visible,
+.theme-light input:focus-visible,
+.theme-light select:focus-visible,
+.theme-light textarea:focus-visible,
+.theme-light [tabindex]:focus-visible,
+.theme-light .drop:focus-within{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+  border-radius:var(--r-sm);
+}
+/* ファイル選択はラベルが実体なので、中の input にフォーカスが来たらラベルを光らせる */
+.theme-light .drop:focus-within{outline-offset:2px;border-color:var(--accent)}
 .theme-light .formcard .btn{width:100%;margin-top:var(--s5)}
 .theme-light .altlink{color:var(--muted);font-size:var(--fs-sm);margin-top:var(--s4)}
 .theme-light .altlink a{color:var(--accent);font-weight:600}

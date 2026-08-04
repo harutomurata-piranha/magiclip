@@ -101,7 +101,14 @@
       "Bash(echo \"  / \\(401=限定公開\\):  $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/\\)\")",
       "Bash(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz)",
       "Bash(echo \"  /healthz:          $\\(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://magiclip.onrender.com/healthz\\)\")",
-      "mcp__claude-in-chrome__find"
+      "mcp__claude-in-chrome__find",
+      "Bash(sed 's/=.*$/=<設定済み>/' .env.development)",
+      "Bash(python3 -c ' *)",
+      "Bash(PORT=5052 nohup python3 server.py)",
+      "Bash(curl -s -o /dev/null http://127.0.0.1:5052/healthz)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5052/healthz)",
+      "Bash(echo \"server: $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5052/healthz\\)\")",
+      "Bash(python3 tools/set_state.py list)"
     ]
   },
   "sandbox": {
