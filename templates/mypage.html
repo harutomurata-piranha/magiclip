@@ -31,8 +31,10 @@
       </td>
       <td class="col-date">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
       <td>
+        {# 失敗行も行き止まりにしない。原因と再試行は処理中画面に出る #}
         {% if j.status == '完成' %}<a href="{{ url_for('result', job_id=j.id) }}">ひらく</a>
-        {% elif j.status not in ['エラー'] %}<a href="{{ url_for('processing', job_id=j.id) }}">ようすを見る</a>{% endif %}
+        {% elif j.status == 'エラー' %}<a href="{{ url_for('processing', job_id=j.id) }}">くわしく見る</a>
+        {% else %}<a href="{{ url_for('processing', job_id=j.id) }}">ようすを見る</a>{% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -64,10 +66,13 @@
     border-bottom:1px solid var(--line)}
   .my-jobs th{color:var(--muted);font-weight:600;font-size:var(--fs-xs)}
   .my-jobs a{color:var(--accent);font-weight:600}
-  .tag{font-size:var(--fs-xs);padding:2px 10px;border-radius:999px;
-    background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+  /* 3種のバッジは同じ形・同じ高さで、色だけで状態を伝える（白背景に対し4.5:1以上） */
+  .tag{display:inline-block;font-size:var(--fs-xs);line-height:18px;padding:0 10px;
+    border-radius:999px;background:var(--surface);border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap}
   .tag.done{color:var(--success)}
   .tag.err{color:var(--danger)}
+  .tag.run{color:var(--info)}
   .my-empty{padding:var(--s6) 0}
   .my-empty-title{font-size:var(--fs-lg);font-weight:600;margin:0 0 var(--s1)}
   .my-empty-sub{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s4)}

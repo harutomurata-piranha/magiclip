@@ -12,7 +12,7 @@
   --bg:#ffffff; --surface:#f7f8fa; --line:#e4e7ec;
   --text:#1a1d23; --muted:#5f6673;
   --accent:#1e3a8a; --accent-weak:#eef2ff;
-  --danger:#b42318; --success:#067647; --brand:#7C3AED;
+  --danger:#b42318; --success:#067647; --info:#0e7490; --brand:#7C3AED;
   /* 旧クラスが参照する変数も上書きして、ヘッダー等が破綻しないようにする */
   --panel:#ffffff; --panel2:#f7f8fa;
   /* spacing 4pxグリッド */
@@ -31,6 +31,9 @@
 .theme-light .brand-spark{filter:none}      /* 光らせない（魔法は完成時だけ） */
 .theme-light .nav nav a{color:var(--muted)}
 .theme-light .nav nav a:hover{color:var(--text)}
+/* ログアウトが旧テーマのアルファ0.2で「無効なボタン」に見えていたため、他のリンクと揃える */
+.theme-light .nav nav a.muted{color:var(--muted)}
+.theme-light .nav nav a.muted:hover{color:var(--text)}
 .theme-light .foot{color:var(--muted)}
 
 /* Button: primary=1画面に1つ / secondary / ghost */
