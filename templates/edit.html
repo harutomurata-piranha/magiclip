@@ -26,6 +26,13 @@
         </select>
       </div>
 
+      {# チェックの意味を画面に明記する。この画面で最も重要な操作なので推測させない #}
+      <div class="list-head">
+        <span class="list-head-use">使う</span>
+        <span class="list-head-note">チェックした場面だけを使います</span>
+        <button type="button" class="linkbtn" id="toggleAll">すべて選ぶ</button>
+      </div>
+
       <div class="scene-list" id="sceneList">
         {% for s in scenes %}
         <div class="scene-row {{ 'on' if s.selected else '' }}" data-i="{{ s.i }}">
@@ -40,9 +47,14 @@
         {% endfor %}
       </div>
 
+      {# 画面下に固定。何件使うかと所要時間を、押す前に必ず見せる #}
       <div class="edit-actions">
-        <button class="btn" type="submit">作り直す</button>
-        <a class="btn btn-ghost" href="{{ url_for('result', job_id=job.id) }}">やめる</a>
+        <p class="edit-count"><span id="count"></span>／{{ scenes|length }}件を使います
+          <span class="edit-time">作り直しに数分かかります</span></p>
+        <div class="edit-buttons">
+          <button class="btn" type="submit">作り直す</button>
+          <a class="btn btn-ghost" href="{{ url_for('result', job_id=job.id) }}">やめる</a>
+        </div>
       </div>
     </form>
   </div>
@@ -56,7 +68,10 @@
 
   /* PC: プレビュー(左) ＋ 文字の一覧(右)。900px未満は縦積み */
   .editlayout{display:grid;grid-template-columns:300px 1fr;gap:var(--s5);align-items:start}
-  .editpreview video{width:100%;max-height:70vh;border-radius:var(--r-md);background:#000;display:block;margin:0}
+  /* 下の方の文字を直すときも映像を見ながら作業できるよう、プレビューは追従させる */
+  .editpreview{position:sticky;top:var(--s6)}
+  .editpreview video{width:100%;aspect-ratio:9/16;object-fit:contain;max-height:60vh;
+    border-radius:var(--r-md);background:#000;display:block;margin:0}
 
   .fontpick{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s4)}
   .fontpick label{font-size:var(--fs-sm);color:var(--muted);margin:0;white-space:nowrap}
@@ -70,7 +85,9 @@
   .scene-row{display:grid;grid-template-columns:auto auto 1fr;gap:var(--s3);
     align-items:start;padding:var(--s4) var(--s1);border-bottom:1px solid var(--line)}
   .scene-row.on{background:var(--accent-weak)}
-  .scene-row.off{opacity:.5}
+  /* 未採用は opacity で薄くすると文字のコントラストが基準を割るため、文字色で表す */
+  .scene-row.off .stxt{color:var(--muted)}
+  .scene-row.off .thumb{filter:grayscale(1)}
   .scene-row .cb{width:22px;height:22px;margin-top:var(--s5);flex:none;accent-color:var(--accent)}
   .scene-row .thumb{width:48px;height:85px;flex:none;border-radius:var(--r-sm);object-fit:cover;background:var(--surface)}
   .scene-row .meta{min-width:0}
@@ -81,7 +98,21 @@
     font-family:inherit;line-height:1.6;resize:none;overflow:hidden}
   .scene-row .stxt:focus{border-color:var(--accent)}
 
-  .edit-actions{display:flex;gap:var(--s3);align-items:center;margin-top:var(--s5)}
+  /* リストの見出し（チェックの意味を明示する） */
+  .list-head{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s1) var(--s2)}
+  .list-head-use{font-size:var(--fs-xs);color:var(--muted);font-weight:600;white-space:nowrap}
+  .list-head-note{font-size:var(--fs-sm);color:var(--muted);flex:1}
+  .linkbtn{background:none;border:0;padding:var(--s1) var(--s2);cursor:pointer;
+    color:var(--accent);font-weight:600;font-size:var(--fs-sm);font-family:inherit}
+
+  /* 操作列は常に見えている必要がある（23件スクロールしないと押せない状態を避ける） */
+  .edit-actions{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);
+    padding:var(--s3) 0;margin-top:var(--s4);display:flex;align-items:center;
+    justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
+  .edit-count{margin:0;font-size:var(--fs-sm);color:var(--muted)}
+  .edit-count #count{color:var(--text);font-weight:600}
+  .edit-time{display:block;font-size:var(--fs-xs)}
+  .edit-buttons{display:flex;gap:var(--s3);align-items:center}
 
   @media(max-width:900px){
     .editlayout{grid-template-columns:1fr;gap:var(--s4)}
@@ -96,18 +127,33 @@
     .scene-row .meta{display:contents}
     .scene-row .t{grid-area:t;margin:0}
     .scene-row .stxt{grid-area:tx}
-    .edit-actions{position:sticky;bottom:0;background:var(--bg);
-      border-top:1px solid var(--line);padding:var(--s3) 0;margin-top:var(--s4)}
-    .edit-actions .btn{flex:1}
+    .editpreview{position:static}          /* 縦積みでは追従させない */
+    .edit-buttons{flex:1}
+    .edit-buttons .btn{flex:1}
   }
 </style>
 <script>
   const list = document.getElementById('sceneList');
+  const rows = [...list.querySelectorAll('.scene-row')];
+  const countEl = document.getElementById('count');
+  const toggleAll = document.getElementById('toggleAll');
+
+  // 何件使うかを常に見せる（押す前に結果が予想できるように）
+  function updateCount(){
+    const n = rows.filter(r => r.querySelector('.cb').checked).length;
+    countEl.textContent = n;
+    toggleAll.textContent = (n === rows.length) ? 'すべて外す' : 'すべて選ぶ';
+  }
   function paint(row){
     const on = row.querySelector('.cb').checked;
     row.classList.toggle('on', on);
     row.classList.toggle('off', !on);
+    updateCount();
   }
+  toggleAll.addEventListener('click', () => {
+    const toOn = rows.some(r => !r.querySelector('.cb').checked);
+    rows.forEach(r => { r.querySelector('.cb').checked = toOn; paint(r); });
+  });
   // 文字は全文が見えている必要がある（内側スクロールで隠れると読めない・直せない）
   function fit(txt){
     txt.style.height = 'auto';
