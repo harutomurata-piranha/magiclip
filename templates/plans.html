@@ -9,6 +9,7 @@
   {# 料金カードは「独立して操作できるまとまり」＝Cardの正しい用途。主CTAは推奨プランの1つだけ #}
   <div class="plangrid">
     <div class="plan">
+      <p class="plan-badge"></p>
       <h2>おためし</h2>
       <p class="price">¥0</p>
       <ul>
@@ -24,7 +25,7 @@
     </div>
 
     <div class="plan feat">
-      <p class="plan-badge">よく使われています</p>
+      <p class="plan-badge"><span>よく使われています</span></p>
       <h2>1本ずつ</h2>
       <p class="price">¥{{ cfg.PRICE_PAYG_JPY }}<span>／1本</span></p>
       <ul>
@@ -42,6 +43,7 @@
     </div>
 
     <div class="plan">
+      <p class="plan-badge"></p>
       <h2>月額</h2>
       <p class="price">¥{{ cfg.PRICE_MONTHLY_JPY }}<span>／月</span></p>
       <ul>
@@ -72,16 +74,18 @@
   .plan{display:flex;flex-direction:column;background:var(--bg);
     border:1px solid var(--line);border-radius:var(--r-md);padding:var(--s5)}
   .plan.feat{border-color:var(--accent)}
-  .plan-badge{display:inline-block;align-self:flex-start;color:var(--accent);
-    background:var(--accent-weak);border-radius:999px;padding:2px 10px;
+  /* バッジの有無で上部の高さが変わりCTAの位置がずれていたため、常に同じ高さの帯を確保する */
+  .plan-badge{display:block;min-height:22px;line-height:22px;color:var(--accent);
     font-size:var(--fs-xs);font-weight:600;margin:0 0 var(--s2)}
+  .plan-badge span{background:var(--accent-weak);border-radius:999px;padding:2px 10px}
   .plan h2{font-size:var(--fs-base);font-weight:600;margin:0 0 var(--s2)}
   .price{font-size:var(--fs-lg);font-weight:700;margin:0 0 var(--s4)}
   .price span{font-size:var(--fs-sm);font-weight:400;color:var(--muted)}
+  /* 3項目のリストに罫線は不要（破線はトークンに無く、他画面とも不整合だった） */
   .plan ul{list-style:none;padding:0;margin:0 0 var(--s5);
     color:var(--muted);font-size:var(--fs-sm)}
-  .plan li{padding:var(--s1) 0}
-  .plan form{margin-top:auto}
+  .plan ul li{padding:var(--s1) 0;border:0}   /* 旧CSSの破線罫線を打ち消す（詳細度を合わせる） */
+  .plan form,.plan>.btn{margin-top:auto}   /* CTAをカードの底に揃える */
   .plan .btn{width:100%;text-align:center}
   .plans-note{color:var(--muted);font-size:var(--fs-sm);margin:var(--s5) 0 0}
   @media(max-width:720px){ .plangrid{grid-template-columns:1fr} }

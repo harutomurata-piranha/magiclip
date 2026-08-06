@@ -37,7 +37,11 @@
 .theme-light .foot{color:var(--muted)}
 
 /* Button: primary=1画面に1つ / secondary / ghost */
-.theme-light .btn{background:var(--accent);color:#fff;font-weight:700;
+/* a と button で既定の line-height が違い高さがずれるため、揃えてから中央寄せする */
+.theme-light .btn{display:inline-flex;align-items:center;justify-content:center;
+  box-sizing:border-box;line-height:1.4;
+  border:1px solid transparent;   /* secondaryの1px枠と高さを揃える */
+  background:var(--accent);color:#fff;font-weight:700;
   border-radius:var(--r-sm);padding:var(--s3) var(--s5);min-height:44px;font-size:var(--fs-base)}
 .theme-light .btn:hover{transform:none;opacity:.92}
 .theme-light .btn-secondary{background:var(--bg);color:var(--text);
